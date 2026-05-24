@@ -2,6 +2,9 @@
 
 A Raspberry Pi 5-powered camera slider system with 3-axis motion control, designed for professional timelapse, cinematic, and macro 3D scanning photography.
 
+All modes are still being tested and refined, but the core parts are all there.
+More information about the hardware and wiring coming soon!!!
+
 ## Overview
 
 PiSlider combines precision motor control, a web-based interface, and a sophisticated exposure automation system into one portable platform. Connect to the slider's WiFi hotspot, open a browser, and control everything from your phone or laptop — no app install required.
