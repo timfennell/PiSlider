@@ -216,25 +216,3 @@ Captured images are saved to the path configured in the UI. By default this is a
 
 The PiSlider web UI lets you browse and configure the output directory.
 
----
-
-## Troubleshooting
-
-**Can't reach `pislider.local`:**
-- Make sure you're connected to the `PiSlider` WiFi hotspot, not your home network
-- Try `http://192.168.4.1:8000/` directly (default hotspot IP)
-- Run `sudo systemctl status pislider` on the Pi to check server status
-
-**Server not starting automatically:**
-- Check: `sudo systemctl status pislider-wake`
-- Manually start: `sudo systemctl start pislider`
-
-**Camera not found:**
-- Run: `libcamera-still --list-cameras`
-- Ensure camera ribbon cable is firmly connected
-- Check: `sudo raspi-config` → Interface Options → Camera
-
-**Motor not moving:**
-- Verify power supply voltage is adequate (12V rail)
-- Check GPIO/UART connections in `hardware.py`
-- Watch logs: `journalctl -u pislider -f`
