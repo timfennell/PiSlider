@@ -1,4 +1,4 @@
-# Holy Grail Mode — Technical Deep Dive
+# Holy Grail Mode — Still early testing.
 
 Holy Grail timelapse refers to shooting through an entire day-to-night or night-to-day transition, maintaining smooth exposure throughout. It's considered the hardest challenge in timelapse photography because the scene brightness changes by up to **14 stops** (from bright daylight to deep night), and any step-change in exposure is immediately visible as a flash in the final video.
 
