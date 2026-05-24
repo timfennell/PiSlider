@@ -1,0 +1,16 @@
+{
+  "workflowIntegrationId": "com.pislider.retime",
+  "version": "1.0.0",
+  "name": "PiSlider Retime",
+  "description": "Phase-aligned motion retime for PiSlider captures",
+  "host": {
+    "minVersion": "18.0"
+  },
+  "panels": [
+    {
+      "id": "retimePanel",
+      "name": "PiSlider Retime",
+      "supportedPages": ["edit", "cut", "media"]
+    }
+  ]
+}

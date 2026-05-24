@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<BlackmagicDesign>
+    <Plugin>
+        <Id>com.pislider.retime</Id>
+        <Name>PiSlider Retime</Name>
+        <Version>1.0</Version>
+        <Description>Phase-aligned motion retime for PiSlider captures</Description>
+        <FilePath>main.js</FilePath>
+    </Plugin>
+</BlackmagicDesign>

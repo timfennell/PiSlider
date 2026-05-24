@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PiSlider Retime</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #1a1a1a;
+    color: #d0d0d0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 13px;
+    padding: 20px;
+    max-width: 700px;
+    margin: 0 auto;
+  }
+
+  h1 {
+    font-size: 18px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 4px;
+  }
+  .subtitle {
+    font-size: 11px;
+    color: #555;
+    margin-bottom: 24px;
+  }
+
+  h3 {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #555;
+    margin: 20px 0 8px;
+    padding-bottom: 5px;
+    border-bottom: 1px solid #2a2a2a;
+  }
+
+  /* ── Inputs ── */
+  input[type="text"], input[type="number"] {
+    width: 100%;
+    background: #111;
+    border: 1px solid #333;
+    color: #ccc;
+    border-radius: 5px;
+    padding: 8px 10px;
+    font-size: 12px;
+    font-family: "SF Mono", "Fira Mono", monospace;
+    transition: border-color 0.15s;
+  }
+  input:focus { outline: none; border-color: #555; }
+  input.err   { border-color: #e57373; }
+  input.ok    { border-color: #4caf50; }
+
+  .field-label {
+    font-size: 11px;
+    color: #888;
+    margin-bottom: 4px;
+  }
+  .field-hint {
+    font-size: 10px;
+    color: #484848;
+    margin-top: 3px;
+  }
+
+  /* ── Path rows ── */
+  .path-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .path-row input { flex: 1; }
+
+  /* ── Clip rows ── */
+  .clip-row {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 6px;
+    align-items: center;
+  }
+  .clip-row input { flex: 1; }
+  .remove-btn {
+    background: none;
+    border: 1px solid #3a3a3a;
+    color: #666;
+    border-radius: 4px;
+    padding: 7px 10px;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+  .remove-btn:hover { color: #e57373; border-color: #e57373; }
+
+  .browse-btn {
+    background: #1a1a1a;
+    border: 1px solid #333;
+    color: #888;
+    border-radius: 4px;
+    padding: 7px 10px;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    flex-shrink: 0;
+    transition: all 0.15s;
+  }
+  .browse-btn:hover { border-color: #555; color: #ccc; }
+
+  .add-btn {
+    background: none;
+    border: 1px dashed #333;
+    color: #666;
+    border-radius: 5px;
+    padding: 7px 14px;
+    cursor: pointer;
+    font-size: 12px;
+    width: 100%;
+    margin-top: 4px;
+    transition: all 0.15s;
+  }
+  .add-btn:hover { border-color: #555; color: #aaa; }
+
+  /* ── Options row ── */
+  .options-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+  }
+  @media (max-width: 500px) { .options-grid { grid-template-columns: 1fr; } }
+
+  label.toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    color: #bbb;
+    font-size: 12px;
+    padding: 6px 0;
+  }
+  input[type="checkbox"] { accent-color: #7fda7f; width: 15px; height: 15px; }
+
+  /* ── Buttons ── */
+  .generate-btn {
+    width: 100%;
+    margin-top: 20px;
+    padding: 12px;
+    background: #1a3a1a;
+    border: 1px solid #2a7a2a;
+    color: #7fda7f;
+    font-size: 15px;
+    font-weight: 700;
+    border-radius: 6px;
+    cursor: pointer;
+    letter-spacing: 0.03em;
+    transition: background 0.15s;
+  }
+  .generate-btn:hover:not(:disabled) { background: #223a22; }
+  .generate-btn:disabled { opacity: 0.4; cursor: default; }
+  .generate-btn.running {
+    background: #2a2000;
+    border-color: #7a6000;
+    color: #ffc940;
+  }
+
+  /* ── Result banner ── */
+  .result {
+    margin-top: 14px;
+    padding: 12px 14px;
+    background: #0d200d;
+    border: 1px solid #2a5a2a;
+    border-radius: 6px;
+    display: none;
+  }
+  .result.visible { display: block; }
+  .result-title { color: #7fda7f; font-weight: 700; margin-bottom: 6px; }
+  .result-path {
+    font-family: "SF Mono", monospace;
+    font-size: 11px;
+    color: #aaa;
+    word-break: break-all;
+    margin-bottom: 8px;
+  }
+  .reveal-btn {
+    background: #1a3a1a;
+    border: 1px solid #2a6a2a;
+    color: #7fda7f;
+    border-radius: 4px;
+    padding: 5px 12px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .reveal-btn:hover { background: #223a22; }
+
+  /* ── Log ── */
+  #log-wrap {
+    margin-top: 14px;
+    background: #111;
+    border: 1px solid #222;
+    border-radius: 5px;
+    max-height: 260px;
+    overflow-y: auto;
+    display: none;
+  }
+  #log-wrap.visible { display: block; }
+  #log {
+    padding: 10px;
+    font-family: "SF Mono", "Fira Mono", monospace;
+    font-size: 11px;
+    line-height: 1.6;
+    color: #888;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  #log .err  { color: #e57373; }
+  #log .good { color: #7fda7f; }
+</style>
+</head>
+<body>
+
+<h1>PiSlider Retime</h1>
+<p class="subtitle">Paste folder paths below. Retimed sequences + a Resolve timeline XML are generated automatically.</p>
+
+<!-- ── Plate ──────────────────────────────────────────────────────────────── -->
+<h3>Plate (reference pass)</h3>
+<div class="field-label">Folder path</div>
+<div class="path-row">
+  <input type="text" id="plate-path" placeholder="/Volumes/Footage/shoot_A/plate">
+  <button class="browse-btn" title="Choose folder" onclick="browseInto('plate-path', 'Choose plate folder')">📁</button>
+</div>
+<div class="field-hint">Folder must contain MOTION.json and image frames</div>
+
+<!-- ── Clips ─────────────────────────────────────────────────────────────── -->
+<h3>Clips to retime</h3>
+<div id="clip-list"></div>
+<button class="add-btn" onclick="addClip()">+ Add clip folder</button>
+
+<!-- ── Options ───────────────────────────────────────────────────────────── -->
+<h3>Options</h3>
+<div class="options-grid">
+  <div>
+    <div class="field-label">Timeline FPS</div>
+    <input type="number" id="fps" value="24" min="1" max="120" step="1" style="width:100%">
+  </div>
+  <div>
+    <div class="field-label">Sequence name</div>
+    <input type="text" id="seq-name" value="PiSlider Retime">
+  </div>
+  <div>
+    <div class="field-label">Output root (optional)</div>
+    <input type="text" id="output-root" placeholder="default: beside each clip">
+  </div>
+</div>
+
+<div style="margin-top:12px">
+  <label class="toggle">
+    <input type="checkbox" id="correct-tilt">
+    Tilt keystoning correction
+  </label>
+  <div id="tilt-row" style="display:none; margin-top:6px">
+    <div class="field-label">Tilt factor override (blank = auto from focal_mm)</div>
+    <input type="number" id="tilt-factor" step="0.1" min="0"
+           placeholder="auto" style="max-width:180px">
+  </div>
+</div>
+
+<!-- ── Generate ──────────────────────────────────────────────────────────── -->
+<button class="generate-btn" id="gen-btn" onclick="generate()">
+  ▶ Generate Timeline
+</button>
+
+<!-- ── Result ────────────────────────────────────────────────────────────── -->
+<div class="result" id="result">
+  <div class="result-title">✓ Timeline ready — import into DaVinci Resolve</div>
+  <div class="result-path" id="result-path"></div>
+  <button class="reveal-btn" onclick="revealXml()">Show in Finder</button>
+  <span style="color:#555; font-size:11px; margin-left:12px">
+    File → Import Timeline → select the .xml file
+  </span>
+</div>
+
+<!-- ── Log ───────────────────────────────────────────────────────────────── -->
+<div id="log-wrap"><pre id="log"></pre></div>
+
+<script>
+const BASE = 'http://localhost:9077';
+let lastXmlPath = null;
+
+// ── Clip management ───────────────────────────────────────────────────────
+
+function addClip(value = '') {
+  const list = document.getElementById('clip-list');
+  const row  = document.createElement('div');
+  row.className = 'clip-row';
+  row.innerHTML = `
+    <input type="text" placeholder="/Volumes/Footage/shoot_A/clip_B" value="${value}">
+    <button class="browse-btn" title="Choose folder" onclick="browseIntoEl(this.previousElementSibling, 'Choose clip folder')">📁</button>
+    <button class="remove-btn" onclick="this.parentElement.remove()">✕</button>`;
+  list.appendChild(row);
+  row.querySelector('input').focus();
+}
+
+function getClipPaths() {
+  return Array.from(document.querySelectorAll('#clip-list input'))
+    .map(i => i.value.trim()).filter(Boolean);
+}
+
+// ── Folder browse ─────────────────────────────────────────────────────────
+
+async function browseInto(inputId, prompt = 'Choose a folder') {
+  const res  = await fetch(`${BASE}/browse`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({prompt}),
+  }).catch(() => null);
+  if (!res) return;
+  const data = await res.json();
+  if (data.path) document.getElementById(inputId).value = data.path;
+}
+
+async function browseIntoEl(inputEl, prompt = 'Choose a folder') {
+  const res  = await fetch(`${BASE}/browse`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({prompt}),
+  }).catch(() => null);
+  if (!res) return;
+  const data = await res.json();
+  if (data.path) inputEl.value = data.path;
+}
+
+// ── Tilt toggle ───────────────────────────────────────────────────────────
+
+document.getElementById('correct-tilt').addEventListener('change', function() {
+  document.getElementById('tilt-row').style.display = this.checked ? 'block' : 'none';
+});
+
+// ── Generate ──────────────────────────────────────────────────────────────
+
+async function generate() {
+  const plate  = document.getElementById('plate-path').value.trim();
+  const clips  = getClipPaths();
+  const fps    = parseFloat(document.getElementById('fps').value) || 24;
+  const seqName = document.getElementById('seq-name').value.trim() || 'PiSlider Retime';
+  const outRoot = document.getElementById('output-root').value.trim();
+  const correctTilt = document.getElementById('correct-tilt').checked;
+  const tfVal  = document.getElementById('tilt-factor')?.value?.trim();
+  const tiltFactor = tfVal ? parseFloat(tfVal) : null;
+
+  // Validate first
+  const vRes = await fetch(`${BASE}/validate`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({plate, clips}),
+  }).then(r => r.json()).catch(() => ({ok: false, errors: ['Server not reachable']}));
+
+  if (!vRes.ok) {
+    clearLog();
+    vRes.errors.forEach(e => appendLog(e, 'err'));
+    showLog();
+    return;
+  }
+
+  const btn = document.getElementById('gen-btn');
+  btn.disabled = true;
+  btn.classList.add('running');
+  btn.textContent = '⏳ Running…';
+  document.getElementById('result').classList.remove('visible');
+  clearLog();
+  showLog();
+
+  const body = {
+    plate, clips, fps, correct_tilt: correctTilt,
+    tilt_factor: tiltFactor, output_root: outRoot || null,
+    sequence_name: seqName,
+  };
+
+  try {
+    const resp = await fetch(`${BASE}/generate`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+
+    const reader = resp.body.getReader();
+    const dec    = new TextDecoder();
+    let   buf    = '';
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream: true});
+      const lines = buf.split('\n');
+      buf = lines.pop();
+
+      for (const line of lines) {
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        try {
+          const data = JSON.parse(payload);
+          if (data.__done__) {
+            lastXmlPath = data.xml;
+            if (lastXmlPath) {
+              document.getElementById('result-path').textContent = lastXmlPath;
+              document.getElementById('result').classList.add('visible');
+            }
+          } else {
+            appendLog(typeof data === 'string' ? data : JSON.stringify(data));
+          }
+        } catch {
+          appendLog(payload);
+        }
+      }
+    }
+  } catch (e) {
+    appendLog(`Connection error: ${e.message}`, 'err');
+  }
+
+  btn.disabled = false;
+  btn.classList.remove('running');
+  btn.textContent = '▶ Generate Timeline';
+}
+
+async function revealXml() {
+  if (!lastXmlPath) return;
+  await fetch(`${BASE}/reveal`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({path: lastXmlPath}),
+  });
+}
+
+// ── Log helpers ───────────────────────────────────────────────────────────
+
+function clearLog()  { document.getElementById('log').innerHTML = ''; }
+function showLog()   { document.getElementById('log-wrap').classList.add('visible'); }
+
+function appendLog(text, cls) {
+  const el   = document.getElementById('log');
+  const wrap = document.getElementById('log-wrap');
+  const span = document.createElement('span');
+  if (cls) span.className = cls;
+  span.textContent = text + '\n';
+  el.appendChild(span);
+  wrap.scrollTop = wrap.scrollHeight;
+}
+
+// ── Init: start with one clip row ─────────────────────────────────────────
+addClip();
+</script>
+</body>
+</html>
