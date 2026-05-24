@@ -1,4 +1,4 @@
-# PiSlider Retime — DaVinci Resolve Plugin
+# PiSlider Retime — DaVinci Resolve Plugin (DOES NOT WORK YET)
 
 A DaVinci Resolve Workflow Integration panel that reads PiSlider motion metadata and generates a retime curve for your timelapse or cinema clip — letting you speed up, slow down, or ramp playback speed in sync with the slider's physical movement data.
 
