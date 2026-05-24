@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PiSlider — Macro Scan Graph</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Rajdhani:wght@300;400;600;700&display=swap');
+    :root {
+      --bg:     #0a0c0e;
+      --bg2:    #0f1215;
+      --border: #1e2530;
+      --bright: #2a3545;
+      --green:  #00ff88;
+      --cyan:   #00d4ff;
+      --gold:   #ffaa00;
+      --mag:    #ff40c0;
+      --red:    #ff3344;
+      --text:   #ccd6e0;
+      --dim:    #5a6a7a;
+      --muted:  #2e3a46;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; background: var(--bg); color: var(--text);
+                 font-family: 'JetBrains Mono', monospace; font-size: 13px; overflow: hidden; }
+
+    /* ── Shell: header / sphere / preview-bar ── */
+    #shell {
+      display: grid;
+      grid-template-rows: 48px 1fr 240px;
+      height: 100vh;
+    }
+
+    /* ── Header ── */
+    header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 18px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg2);
+      flex-shrink: 0;
+    }
+    .hdr-left { display: flex; align-items: center; gap: 14px; }
+    .hdr-title {
+      font-family: 'Rajdhani', sans-serif; font-size: 1.1rem; font-weight: 700;
+      letter-spacing: 0.12em; text-transform: uppercase; color: var(--green);
+    }
+    .hdr-sub { font-size: 0.68rem; color: var(--dim); letter-spacing: 0.05em; }
+    .dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--red); box-shadow: 0 0 6px var(--red);
+      transition: background 0.3s, box-shadow 0.3s;
+    }
+    .dot.live { background: var(--green); box-shadow: 0 0 8px var(--green); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+    .hdr-stats { display: flex; gap: 20px; align-items: center; }
+    .stat { display: flex; flex-direction: column; align-items: flex-end; }
+    .stat-val { font-size: 0.95rem; font-weight: 500; color: var(--cyan); }
+    .stat-lbl { font-size: 0.58rem; color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; }
+    .btn-back {
+      background: none; border: 1px solid var(--bright); color: var(--dim);
+      font-family: 'JetBrains Mono', monospace; font-size: 0.7rem;
+      padding: 4px 10px; cursor: pointer; letter-spacing: 0.05em;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    .btn-back:hover { border-color: var(--cyan); color: var(--cyan); }
+
+    /* ── Sphere ── */
+    #sphere-wrap {
+      position: relative;
+      width: 100%; height: 100%;
+      background: var(--bg);
+      overflow: hidden;
+    }
+    #sphere-canvas { display: block; width: 100% !important; height: 100% !important; }
+
+    /* Sphere overlays */
+    .ov {
+      position: absolute; pointer-events: none; z-index: 10;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    #ov-status {
+      top: 12px; left: 18px;
+      display: flex; flex-direction: column; gap: 4px;
+    }
+    .ov-pill {
+      background: rgba(10,12,14,0.75); border: 1px solid var(--bright);
+      border-radius: 4px; padding: 4px 10px;
+      font-size: 0.72rem; color: var(--text); line-height: 1.5;
+    }
+    .ov-val { color: var(--cyan); font-weight: 600; }
+    .ov-val.gold { color: var(--gold); }
+    .ov-val.green { color: var(--green); }
+
+    #ov-legend {
+      top: 12px; right: 18px;
+      display: flex; flex-direction: column; gap: 5px;
+    }
+    .leg-row { display: flex; align-items: center; gap: 6px;
+               background: rgba(10,12,14,0.7); border-radius:3px; padding: 3px 8px; }
+    .leg-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+    .leg-txt { font-size: 0.62rem; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; }
+
+    #ov-progress {
+      bottom: 0; left: 0; right: 0;
+      padding: 0 18px 8px;
+      display: flex; flex-direction: column; gap: 4px;
+    }
+    #ov-pct { font-size: 0.65rem; color: var(--dim); }
+    #ov-bar-track {
+      height: 3px; background: var(--bright); border-radius: 2px; overflow: hidden;
+    }
+    #ov-bar-fill {
+      height: 100%; width: 0%; background: var(--green);
+      border-radius: 2px; transition: width 0.4s;
+    }
+
+    #ov-hint {
+      bottom: 16px; right: 18px;
+      font-size: 0.6rem; color: var(--muted);
+    }
+
+    #ov-waiting {
+      top: 50%; left: 50%; transform: translate(-50%, -50%);
+      text-align: center;
+    }
+    #ov-waiting .big {
+      font-family: 'Rajdhani', sans-serif; font-size: 2.2rem;
+      font-weight: 300; color: var(--muted); letter-spacing: 0.1em;
+    }
+    #ov-waiting .sm { font-size: 0.72rem; margin-top: 8px; color: var(--muted); }
+
+    /* ── Preview bar ── */
+    #preview-bar {
+      display: grid; grid-template-columns: 1fr 1fr;
+      border-top: 1px solid var(--border);
+      background: var(--bg2);
+      overflow: hidden;
+    }
+    .preview-panel {
+      background: var(--bg); display: flex; flex-direction: column; overflow: hidden;
+      border-right: 1px solid var(--border);
+    }
+    .preview-panel:last-child { border-right: none; }
+    .preview-header {
+      padding: 4px 10px; font-size: 0.6rem; color: var(--dim);
+      letter-spacing: 0.08em; text-transform: uppercase;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0; display: flex; align-items: center; gap: 8px;
+    }
+    .preview-body { flex: 1; position: relative; overflow: hidden; }
+
+    #flipbook-canvas { display: block; width: 100%; height: 100%; }
+    .live-feed { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+    .live-feed img { max-height: 100%; max-width: 100%; object-fit: contain; display: block; }
+
+    /* Flipbook controls */
+    #flip-controls {
+      margin-left: auto; display: flex; gap: 4px; align-items: center;
+    }
+    #flip-controls button {
+      background: none; border: 1px solid var(--bright); color: var(--dim);
+      font-size: 0.62rem; padding: 2px 5px; cursor: pointer;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    #flip-controls button:hover { border-color: var(--green); color: var(--green); }
+    #flip-label { color: var(--muted); font-size: 0.6rem; }
+  </style>
+</head>
+<body>
+<div id="shell">
+
+  <!-- ── Header ── -->
+  <header>
+    <div class="hdr-left">
+      <div class="dot" id="liveDot"></div>
+      <div>
+        <div class="hdr-title">PiSlider — Macro Scan</div>
+        <div class="hdr-sub" id="hdrSub">Connecting…</div>
+      </div>
+    </div>
+    <div class="hdr-stats">
+      <div class="stat"><span class="stat-val" id="statStack">—</span><span class="stat-lbl">Stack</span></div>
+      <div class="stat"><span class="stat-val" id="statFrame">—</span><span class="stat-lbl">Frame</span></div>
+      <div class="stat"><span class="stat-val" id="statPan">—</span><span class="stat-lbl">Pan °</span></div>
+      <div class="stat"><span class="stat-val" id="statTilt">—</span><span class="stat-lbl">Tilt °</span></div>
+      <div class="stat"><span class="stat-val" id="statRail">—</span><span class="stat-lbl">Rail mm</span></div>
+    </div>
+    <button class="btn-back" onclick="window.close()">✕ CLOSE</button>
+  </header>
+
+  <!-- ── Sphere (main view) ── -->
+  <div id="sphere-wrap">
+    <canvas id="sphere-canvas"></canvas>
+
+    <!-- Waiting state -->
+    <div class="ov" id="ov-waiting">
+      <div class="big">WAITING FOR SCAN</div>
+      <div class="sm">Start a macro scan — the geodesic map will appear here</div>
+    </div>
+
+    <!-- Status pills (top-left) -->
+    <div class="ov" id="ov-status" style="display:none;">
+      <div class="ov-pill">
+        Stack <span class="ov-val" id="ov-stack">—</span> /
+        <span class="ov-val" id="ov-total-stacks">—</span>
+      </div>
+      <div class="ov-pill">
+        Frame <span class="ov-val gold" id="ov-frame">—</span> /
+        <span class="ov-val gold" id="ov-total-frames">—</span>
+      </div>
+      <div class="ov-pill" id="ov-msg-pill" style="color:var(--dim); max-width:280px;
+           white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"></div>
+    </div>
+
+    <!-- Legend (top-right) -->
+    <div class="ov" id="ov-legend" style="display:none;">
+      <div class="leg-row"><div class="leg-dot" style="background:#00ff88;"></div><span class="leg-txt">Done</span></div>
+      <div class="leg-row"><div class="leg-dot" style="background:#ff3344;"></div><span class="leg-txt">Active</span></div>
+      <div class="leg-row"><div class="leg-dot" style="background:#444;"></div><span class="leg-txt">Pending</span></div>
+      <div class="leg-row"><div class="leg-dot" style="background:none; border:1px solid #ffaa33; border-radius:0; width:14px; height:2px; border-radius:1px;"></div><span class="leg-txt">Path</span></div>
+    </div>
+
+    <!-- Progress bar (bottom) -->
+    <div class="ov" id="ov-progress" style="display:none;">
+      <div id="ov-pct">0%</div>
+      <div id="ov-bar-track"><div id="ov-bar-fill"></div></div>
+    </div>
+
+    <!-- Hint (bottom-right) -->
+    <div class="ov" id="ov-hint" style="display:none;">
+      Drag: rotate &nbsp;|&nbsp; Scroll: zoom &nbsp;|&nbsp; Click node: flipbook
+    </div>
+  </div>
+
+  <!-- ── Preview bar ── -->
+  <div id="preview-bar">
+    <!-- Stack flipbook -->
+    <div class="preview-panel">
+      <div class="preview-header">
+        <span>Stack Flipbook</span>
+        <span id="flip-label">— / —</span>
+        <div id="flip-controls">
+          <button onclick="flipStep(-1)">◀</button>
+          <button id="flipplay" onclick="flipTogglePlay()">▶</button>
+          <button onclick="flipStep(1)">▶▶</button>
+        </div>
+      </div>
+      <div class="preview-body">
+        <canvas id="flipbook-canvas"></canvas>
+      </div>
+    </div>
+
+    <!-- Live camera feed -->
+    <div class="preview-panel">
+      <div class="preview-header">
+        <span style="display:inline-flex; align-items:center; gap:5px;">
+          <span style="display:inline-block; width:6px; height:6px; border-radius:50%;
+                       background:var(--green); animation:pulse 2s infinite;"></span>
+          Live View
+        </span>
+      </div>
+      <div class="preview-body">
+        <div class="live-feed">
+          <img src="/video_feed" onerror="this.style.opacity='0.1'" />
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- #shell -->
+
+<script>
+"use strict";
+
+// ── State ────────────────────────────────────────────────────────────────────
+const stacks = [];       // [{stack, frame_count, pan_deg, tilt_deg, rail_mm, iso, shutter_s, images:[]}]
+let _totalStacks  = 0;
+let _totalFrames  = 0;
+let _flipStack    = 0;   // index into stacks[] for flipbook
+let _flipFrame    = 0;   // frame index within selected stack
+let _flipPlaying  = false;
+let _flipTimer    = null;
+let _imgCache     = {};  // url → HTMLImageElement
+
+// ── 3D Sphere ────────────────────────────────────────────────────────────────
+let sphereScene, sphereCamera, sphereRenderer, sphereGroup;
+let stackPoints   = [];  // {stack, pan_deg, tilt_deg, mesh}
+let serpentine    = [];  // THREE.Line objects
+let currentStack  = null;
+
+function initSphere() {
+  const wrap = document.getElementById('sphere-wrap');
+  const w = wrap.clientWidth, h = wrap.clientHeight;
+
+  sphereScene    = new THREE.Scene();
+  sphereScene.background = new THREE.Color(0x0a0c0e);
+
+  sphereCamera   = new THREE.PerspectiveCamera(60, w / h, 0.1, 100);
+  sphereCamera.position.z = 2.4;
+
+  sphereRenderer = new THREE.WebGLRenderer({ antialias: true, canvas: document.getElementById('sphere-canvas') });
+  sphereRenderer.setSize(w, h);
+  sphereRenderer.setPixelRatio(window.devicePixelRatio);
+
+  // All objects in one group so rotation affects everything uniformly
+  sphereGroup = new THREE.Group();
+  sphereScene.add(sphereGroup);
+
+  // Wireframe icosphere
+  const geo = new THREE.IcosahedronGeometry(1, 4);
+  sphereGroup.add(new THREE.LineSegments(
+    new THREE.WireframeGeometry(geo),
+    new THREE.LineBasicMaterial({ color: 0x1e2530, linewidth: 1 })
+  ));
+
+  sphereScene.add(new THREE.AmbientLight(0xffffff, 0.5));
+  const dl = new THREE.DirectionalLight(0xffffff, 0.4);
+  dl.position.set(1, 1, 1);
+  sphereScene.add(dl);
+
+  // ── Mouse interaction ──
+  let isDragging = false, mouseX = 0, mouseY = 0, clickX = 0, clickY = 0;
+  const raycaster = new THREE.Raycaster();
+  const mouse2d   = new THREE.Vector2();
+
+  sphereRenderer.domElement.addEventListener('mousedown', e => {
+    isDragging = true; mouseX = e.clientX; mouseY = e.clientY;
+    clickX = e.clientX; clickY = e.clientY;
+  });
+  sphereRenderer.domElement.addEventListener('mousemove', e => {
+    if (!isDragging) return;
+    sphereGroup.rotation.y += (e.clientX - mouseX) * 0.006;
+    sphereGroup.rotation.x += (e.clientY - mouseY) * 0.006;
+    mouseX = e.clientX; mouseY = e.clientY;
+  });
+  window.addEventListener('mouseup', () => { isDragging = false; });
+
+  sphereRenderer.domElement.addEventListener('wheel', e => {
+    e.preventDefault();
+    sphereCamera.position.z = Math.max(1.4, Math.min(5, sphereCamera.position.z + e.deltaY * 0.001));
+  }, { passive: false });
+
+  sphereRenderer.domElement.addEventListener('click', e => {
+    if (Math.abs(e.clientX - clickX) > 4 || Math.abs(e.clientY - clickY) > 4) return;
+    const rect = sphereRenderer.domElement.getBoundingClientRect();
+    mouse2d.x =  ((e.clientX - rect.left) / rect.width)  * 2 - 1;
+    mouse2d.y = -((e.clientY - rect.top)  / rect.height) * 2 + 1;
+    raycaster.setFromCamera(mouse2d, sphereCamera);
+    const hits = raycaster.intersectObjects(stackPoints.map(p => p.mesh).filter(Boolean));
+    if (hits.length) {
+      const pt = stackPoints.find(p => p.mesh === hits[0].object);
+      if (pt) {
+        _flipStack = stacks.findIndex(s => s.stack === pt.stack);
+        if (_flipStack < 0) _flipStack = 0;
+        _flipFrame = 0;
+        paintFlipbook();
+      }
+    }
+  });
+
+  // ── Resize ──
+  window.addEventListener('resize', () => {
+    const w = wrap.clientWidth, h = wrap.clientHeight;
+    sphereCamera.aspect = w / h;
+    sphereCamera.updateProjectionMatrix();
+    sphereRenderer.setSize(w, h);
+  });
+
+  renderLoop();
+}
+
+function renderLoop() {
+  requestAnimationFrame(renderLoop);
+  if (sphereRenderer) sphereRenderer.render(sphereScene, sphereCamera);
+}
+
+function panTiltToXYZ(pan_deg, tilt_deg) {
+  const pr = pan_deg  * Math.PI / 180;
+  const tr = tilt_deg * Math.PI / 180;
+  return {
+    x: Math.cos(tr) * Math.sin(pr),
+    y: Math.sin(tr),
+    z: Math.cos(tr) * Math.cos(pr),
+  };
+}
+
+function addStackPoint(stack, pan_deg, tilt_deg) {
+  const { x, y, z } = panTiltToXYZ(pan_deg, tilt_deg);
+  const geo  = new THREE.SphereGeometry(0.045, 8, 8);
+  const mat  = new THREE.MeshBasicMaterial({ color: 0x333333 });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(x, y, z);
+  sphereGroup.add(mesh);
+  stackPoints.push({ stack, pan_deg, tilt_deg, mesh, state: 'pending' });
+}
+
+function drawSerpentine() {
+  serpentine.forEach(l => sphereGroup.remove(l));
+  serpentine = [];
+  const sorted = [...stackPoints].sort((a, b) => a.stack - b.stack);
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const A = sorted[i].mesh.position, B = sorted[i + 1].mesh.position;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(
+      new Float32Array([A.x, A.y, A.z, B.x, B.y, B.z]), 3));
+    const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0xffaa33, linewidth: 2 }));
+    sphereGroup.add(line);
+    serpentine.push(line);
+  }
+}
+
+function setNodeState(stackNum, state) {
+  const pt = stackPoints.find(p => p.stack === stackNum);
+  if (!pt) return;
+  pt.state = state;
+  if (state === 'current') {
+    pt.mesh.material.color.setHex(0xff3344);
+    pt.mesh.scale.setScalar(1.5);
+  } else if (state === 'done') {
+    pt.mesh.material.color.setHex(0x00ff88);
+    pt.mesh.scale.setScalar(1.0);
+  } else {
+    pt.mesh.material.color.setHex(0x333333);
+    pt.mesh.scale.setScalar(1.0);
+  }
+}
+
+// ── Progress overlays ─────────────────────────────────────────────────────────
+function showOverlays() {
+  ['ov-status', 'ov-legend', 'ov-progress', 'ov-hint'].forEach(id => {
+    document.getElementById(id).style.display = '';
+  });
+  document.getElementById('ov-waiting').style.display = 'none';
+}
+
+function updateProgress(stack, frame, totalStacks, totalFrames, msg) {
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  set('ov-stack',        stack);
+  set('ov-total-stacks', totalStacks || _totalStacks);
+  set('ov-frame',        frame);
+  set('ov-total-frames', totalFrames || _totalFrames);
+  if (msg) set('ov-msg-pill', msg);
+
+  const ts = totalStacks || _totalStacks;
+  const tf = totalFrames || _totalFrames;
+  if (ts && tf) {
+    const done = (stack - 1) * tf + frame;
+    const pct  = Math.max(0, Math.min(100, Math.round(done / (ts * tf) * 100)));
+    document.getElementById('ov-bar-fill').style.width = pct + '%';
+    document.getElementById('ov-pct').textContent = pct + '%  (' + done + '/' + (ts * tf) + ' frames)';
+  }
+
+  // Header stats
+  set('statStack', stack + '/' + (totalStacks || _totalStacks));
+  set('statFrame', frame + '/' + (totalFrames || _totalFrames));
+}
+
+// ── Flipbook ──────────────────────────────────────────────────────────────────
+function flipStep(delta) {
+  if (!stacks.length) return;
+  const s    = stacks[_flipStack];
+  const imgs = s ? (s.images || []) : [];
+  _flipFrame = Math.max(0, Math.min(imgs.length - 1, _flipFrame + delta));
+  paintFlipbook();
+}
+
+function flipTogglePlay() {
+  _flipPlaying = !_flipPlaying;
+  const btn = document.getElementById('flipplay');
+  if (_flipPlaying) {
+    btn.textContent = '⏸';
+    _flipTimer = setInterval(() => {
+      const imgs = stacks[_flipStack]?.images || [];
+      if (imgs.length > 1) { _flipFrame = (_flipFrame + 1) % imgs.length; paintFlipbook(); }
+    }, 150);
+  } else {
+    btn.textContent = '▶';
+    clearInterval(_flipTimer);
+  }
+}
+
+function paintFlipbook() {
+  const canvas = document.getElementById('flipbook-canvas');
+  const ctx    = canvas.getContext('2d');
+  const par    = canvas.parentElement;
+  canvas.width  = par.clientWidth;
+  canvas.height = par.clientHeight;
+  const W = canvas.width, H = canvas.height;
+
+  const s    = stacks[_flipStack] || stacks[0];
+  const imgs = s ? (s.images || []) : [];
+  const url  = imgs[_flipFrame];
+
+  // Background
+  ctx.fillStyle = '#0a0c0e';
+  ctx.fillRect(0, 0, W, H);
+
+  if (url) {
+    if (_imgCache[url] === undefined) {
+      // Kick off load
+      const img = new Image();
+      img.onload  = () => { _imgCache[url] = img; paintFlipbook(); };
+      img.onerror = () => { _imgCache[url] = null; paintFlipbook(); };
+      _imgCache[url] = null;  // mark as loading
+      img.src = url;
+      // Show loading text while waiting
+      ctx.fillStyle = '#5a6a7a';
+      ctx.font = '12px JetBrains Mono';
+      ctx.fillText('Loading…', 12, H / 2);
+    } else if (_imgCache[url]) {
+      const im = _imgCache[url];
+      const sc = Math.min(W / im.naturalWidth, H / im.naturalHeight);
+      const iw = im.naturalWidth * sc, ih = im.naturalHeight * sc;
+      ctx.drawImage(im, (W - iw) / 2, (H - ih) / 2, iw, ih);
+    }
+  }
+
+  // Info overlay (if no image loaded yet, show stack metadata)
+  if (!url || !_imgCache[url]) {
+    if (s) {
+      ctx.fillStyle = '#00d4ff';
+      ctx.font = '13px JetBrains Mono';
+      ctx.fillText('Stack ' + (s.stack || '—'), 12, 24);
+      ctx.fillStyle = '#5a6a7a';
+      ctx.font = '11px JetBrains Mono';
+      let y = 42;
+      const line = t => { ctx.fillText(t, 12, y); y += 15; };
+      if (s.pan_deg  != null) line('Pan:   ' + s.pan_deg.toFixed(1) + '°');
+      if (s.tilt_deg != null) line('Tilt:  ' + s.tilt_deg.toFixed(1) + '°');
+      if (s.rail_mm  != null) line('Rail:  ' + s.rail_mm.toFixed(2) + 'mm');
+      if (s.iso)              line('ISO:   ' + s.iso);
+      if (s.shutter_s)        line('Shut:  ' + (s.shutter_s >= 1 ? s.shutter_s.toFixed(2)+'s' : '1/'+Math.round(1/s.shutter_s)));
+      if (!imgs.length) { ctx.fillStyle = '#2e3a46'; line('(no preview images yet)'); }
+    }
+  }
+
+  // Badge: stack N/total — frame M/total
+  if (s) {
+    const badge = `Stack ${s.stack}/${stacks.length}  Frame ${imgs.length ? _flipFrame+1 : '—'}/${imgs.length || '—'}`;
+    ctx.font = '10px JetBrains Mono';
+    const bw = ctx.measureText(badge).width + 14;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(W - bw - 4, 4, bw + 4, 20);
+    ctx.fillStyle = '#00d4ff';
+    ctx.textAlign = 'right';
+    ctx.fillText(badge, W - 6, 18);
+    ctx.textAlign = 'left';
+  }
+
+  // Update header label
+  const lbl = document.getElementById('flip-label');
+  if (lbl && s) lbl.textContent = `Stack ${s.stack}  ${imgs.length ? ((_flipFrame+1)+'/'+imgs.length) : '(no images)'}`;
+}
+
+// ── WebSocket ─────────────────────────────────────────────────────────────────
+const WS_URL = `ws://${window.location.host}/ws-graph`;
+let socket = null;
+
+function ingest(d) {
+  if (d.type === 'init') return;
+
+  // ── Scan planned: initialise sphere with all positions ──
+  if (d.type === 'macro_scan_start') {
+    if (!sphereScene) initSphere();
+    // Clear previous points
+    stackPoints.forEach(p => sphereGroup.remove(p.mesh));
+    stackPoints = [];
+    serpentine.forEach(l => sphereGroup.remove(l));
+    serpentine = [];
+
+    _totalStacks = d.total_stacks || (d.stack_positions || []).length;
+    _totalFrames = d.total_frames || 0;
+
+    (d.stack_positions || []).forEach(p => addStackPoint(p.stack, p.pan_deg, p.tilt_deg));
+    drawSerpentine();
+    showOverlays();
+    document.getElementById('hdrSub').textContent =
+      `${_totalStacks} stacks planned — waiting for first capture…`;
+    return;
+  }
+
+  // ── Per-frame progress ──
+  if (d.type === 'macro_progress') {
+    if (!sphereScene) initSphere();
+    if (!stackPoints.length) return;  // no plan yet — wait for macro_scan_start
+
+    // Update current node colour
+    if (currentStack !== null && currentStack !== d.stack) {
+      setNodeState(currentStack, 'done');
+    }
+    if (d.stack) { setNodeState(d.stack, 'current'); currentStack = d.stack; }
+
+    // Store / update in stacks array
+    const s = {
+      stack:     d.stack,
+      pan_deg:   d.pan_deg,
+      tilt_deg:  d.tilt_deg,
+      rail_mm:   d.rail_mm,
+      iso:       d.iso,
+      shutter_s: d.shutter_s,
+      images:    [],
+    };
+    const idx = stacks.findIndex(st => st.stack === d.stack);
+    if (idx >= 0) { s.images = stacks[idx].images; stacks[idx] = s; }
+    else          { stacks.push(s); }
+
+    if (d.total_stacks) _totalStacks = d.total_stacks;
+    if (d.total_frames) _totalFrames = d.total_frames;
+
+    showOverlays();
+    updateProgress(d.stack, d.frame || 0, d.total_stacks, d.total_frames, d.msg);
+
+    if (d.pan_deg  != null) document.getElementById('statPan').textContent  = d.pan_deg.toFixed(1);
+    if (d.tilt_deg != null) document.getElementById('statTilt').textContent = d.tilt_deg.toFixed(1);
+    if (d.rail_mm  != null) document.getElementById('statRail').textContent = d.rail_mm.toFixed(2);
+
+    document.getElementById('hdrSub').textContent = d.msg || `Stack ${d.stack}/${_totalStacks}`;
+
+    // Auto-select newest stack in flipbook if user hasn't clicked a node
+    if (idx < 0) {
+      _flipStack = stacks.length - 1;
+      _flipFrame = 0;
+    }
+    paintFlipbook();
+    return;
+  }
+
+  // ── Stack complete: store images, mark done ──
+  if (d.type === 'macro_stack_complete') {
+    const idx = stacks.findIndex(st => st.stack === d.stack);
+    if (idx >= 0) {
+      stacks[idx].images = d.preview_urls || [];
+      if (idx === _flipStack) { _flipFrame = 0; paintFlipbook(); }
+    }
+    setNodeState(d.stack, 'done');
+    return;
+  }
+
+  // ── Scan finished ──
+  if (d.type === 'macro_done') {
+    if (currentStack !== null) setNodeState(currentStack, 'done');
+    currentStack = null;
+    document.getElementById('hdrSub').textContent =
+      d.interrupted ? '⚠ Scan stopped.' : '✓ Scan complete!';
+    document.getElementById('ov-bar-fill').style.width = d.interrupted ? '' : '100%';
+    document.getElementById('ov-pct').textContent = d.interrupted ? 'Stopped' : '100%  — complete';
+    return;
+  }
+}
+
+function connect() {
+  socket = new WebSocket(WS_URL);
+  socket.onopen  = () => {
+    document.getElementById('liveDot').classList.add('live');
+    document.getElementById('hdrSub').textContent = 'Connected — waiting for scan…';
+  };
+  socket.onmessage = ev => { try { ingest(JSON.parse(ev.data)); } catch(e) {} };
+  socket.onclose   = () => {
+    document.getElementById('liveDot').classList.remove('live');
+    document.getElementById('hdrSub').textContent = 'Reconnecting…';
+    setTimeout(connect, 2000);
+  };
+  socket.onerror   = () => {};
+}
+
+window.addEventListener('load', () => {
+  // Init sphere immediately so it's ready — shows wireframe without nodes
+  initSphere();
+  connect();
+});
+</script>
+</body>
+</html>

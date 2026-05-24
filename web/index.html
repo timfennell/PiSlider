@@ -1,0 +1,1993 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PiSlider — Web Command Center</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body class="idle">
+
+    <header id="header">
+        <div class="title-block">
+            <h1>PiSlider Controller</h1>
+            <span class="version-tag">Unified Engine v2.4 — Holy Grail / Cinematic / Macro</span>
+        </div>
+        <div class="header-buttons">
+            <button id="modeTimelapse" class="mode-btn active" onclick="setMode('timelapse')">Timelapse</button>
+            <button id="modeCinematic" class="mode-btn" onclick="setMode('cinematic')">Cinematic</button>
+            <button id="modeMacro" class="mode-btn" onclick="setMode('macro')">Macro Focus</button>
+            <button id="startBtn" class="mode-btn active" onclick="startRun()">Start Sequence</button>
+            <button id="recordRunBtn" class="mode-btn" onclick="recordAndRun()"
+                style="background:#1a3a1a; border-color:#2a7a2a; color:#7fda7f; display:none;"
+                title="Start camera recording, hold pre-roll, then begin motion">⏺ Record + Run</button>
+            <button id="stopBtn" class="mode-btn stop-style" onclick="handleStopReset()">E-Stop</button>
+            <button id="resumeBtn" class="mode-btn" onclick="resumeControl()"
+                style="display:none; background:#1a7a1a; color:#fff; border-color:#2aa82a;">✅ Safe to Move</button>
+        </div>
+    </header>
+
+    <main id="mainLayout">
+        <aside id="sidebar">
+
+            <!-- ══════════════════════════════════════════════════ -->
+            <!-- HARDWARE CONFIG                                     -->
+            <!-- ══════════════════════════════════════════════════ -->
+            <section class="group-box">
+                <h3 class="group-title">Hardware Config</h3>
+
+                <div class="control-item">
+                    <label>Active Camera Source</label>
+                    <select id="camera_select" onchange="onCameraChange(this.value)">
+                        <option value="picam">Pi Camera (IMX477)</option>
+                        <option value="sony">Sony WiFi (HTTP API)</option>
+                        <option value="sony_usb">Sony USB Tether (gphoto2)</option>
+                        <option value="sony_s2">Sony S2 Cable (low latency)</option>
+                        <option value="s2">S2 Trigger (GPIO, other camera)</option>
+                    </select>
+                </div>
+
+                <!-- Sony WiFi Connection Panel -->
+                <div id="sony_guide" class="guide-box" style="display:none">
+                    <h4 class="guide-title">Sony WiFi Camera</h4>
+
+                    <!-- Step 1: Scan -->
+                    <div class="row" style="gap:6px; margin-bottom:6px;">
+                        <button class="mode-btn" style="flex:1;" id="sonyScanBtn"
+                            onclick="scanSonyNetworks()"
+                            title="Scan wlan1 (Realtek USB dongle) for Sony camera networks">
+                            🔍 Scan for Camera
+                        </button>
+                        <button class="mode-btn" style="flex:1; background:var(--accent-green,#3a7);"
+                            onclick="detectSony()"
+                            title="Already connected? Auto-detect camera IP on wlan1">
+                            ⬡ Already Connected
+                        </button>
+                    </div>
+
+                    <!-- Scan results — hidden until scan runs -->
+                    <div id="sony_scan_results" style="display:none; margin-bottom:8px;">
+                        <div style="font-size:0.65rem; color:var(--text-dim); margin-bottom:4px;">
+                            Tap a network to select it:
+                        </div>
+                        <div id="sony_network_list"
+                             style="display:flex; flex-direction:column; gap:4px; max-height:120px;
+                                    overflow-y:auto; border:1px solid #333; border-radius:6px; padding:4px;">
+                        </div>
+                    </div>
+
+                    <!-- Step 2: SSID + password (filled automatically on scan select) -->
+                    <div class="row" style="gap:6px; margin-bottom:6px;">
+                        <div class="control-item half">
+                            <label>Network SSID</label>
+                            <input type="text" id="sony_ssid" value=""
+                                placeholder="Tap network above or type SSID">
+                        </div>
+                        <div class="control-item half">
+                            <label>Password <span style="font-size:0.65rem;color:var(--text-dim)">(shown on camera)</span></label>
+                            <input type="password" id="sony_password" value=""
+                                placeholder="Camera WiFi password" autocomplete="off">
+                        </div>
+                    </div>
+                    <input type="hidden" id="sony_ip" value=""><!-- IP auto-discovered from wlan1 gateway -->
+
+                    <!-- Step 3: Connect -->
+                    <div class="row" style="gap:6px; margin-bottom:6px;">
+                        <button class="mode-btn" style="flex:1; background:var(--accent-blue,#27a);"
+                            onclick="connectSony()">⚡ Connect</button>
+                        <button class="mode-btn stop-style" style="flex:0.5;"
+                            onclick="disconnectSony()">Drop</button>
+                    </div>
+
+                    <div id="sony_status" class="readout-card"
+                        style="font-size:0.72rem; text-align:left; color:var(--text-dim);">
+                        Tap <b>Scan</b> to find the camera network, or <b>Already Connected</b> if wlan1 is already joined.
+                    </div>
+                    <ul class="guide-text" style="margin-top:6px;">
+                        <li>Camera: <b>Network → Ctrl w/ Smartphone → ON</b></li>
+                        <li>Camera: <b>Network → Send to Computer → ON</b> (for capture)</li>
+                        <li>Password is shown on the camera screen under Network settings</li>
+                    </ul>
+                </div>
+
+                <!-- Sony USB Tether Panel -->
+                <div id="sony_usb_guide" class="guide-box" style="display:none">
+                    <h4 class="guide-title">Sony USB Tether</h4>
+                    <div class="row" style="gap:6px; margin-bottom:6px;">
+                        <button class="mode-btn" style="flex:1; background:var(--accent-blue,#27a);"
+                            onclick="detectSonyUsb()">
+                            🔌 Detect Camera
+                        </button>
+                        <button class="mode-btn" style="flex:1;" id="usbLiveviewBtn"
+                            onclick="toggleUsbLiveview()"
+                            title="Start/stop USB preview (~2-3fps). Stops automatically during timelapse.">
+                            📹 Liveview OFF
+                        </button>
+                    </div>
+                    <div id="sony_usb_status" class="readout-card"
+                        style="font-size:0.72rem; text-align:left; color:var(--text-dim);">
+                        Connect USB-C cable, then tap <b>Detect Camera</b>.
+                    </div>
+                    <ul class="guide-text" style="margin-top:6px;">
+                        <li>Camera: <b>Setup → USB Connection → PC Remote</b></li>
+                        <li>Camera: <b>Setup → USB Power Supply → OFF</b></li>
+                        <li>RAW files downloaded directly to <b>Pi SSD</b></li>
+                        <li>✅ <b>Holy Grail available</b> — full exposure control via gphoto2</li>
+                        <li>~50–150ms trigger latency (faster than WiFi)</li>
+                    </ul>
+                </div>
+
+                <!-- Sony S2 Cable Info Panel -->
+                <div id="sony_s2_guide" class="guide-box" style="display:none">
+                    <h4 class="guide-title">Sony S2 Cable Mode</h4>
+                    <ul class="guide-text" style="margin-top:4px;">
+                        <li>Shutter fired via <b>GPIO optocoupler → S2 cable</b> (~5ms latency)</li>
+                        <li>Exposure managed entirely <b>on the camera body</b></li>
+                        <li>Files saved to the <b>camera's SD card</b> — no download to Pi</li>
+                        <li>⚠ <b>Holy Grail unavailable</b> in S2 mode (requires WiFi API)</li>
+                        <li>Ideal for <b>motion-detect timelapse</b> with Pi Camera as detector</li>
+                    </ul>
+                </div>
+
+                <div class="control-item">
+                    <label>Storage Destination</label>
+                    <div class="row" style="gap:6px;">
+                        <input type="text" id="save_path" value="/home/tim/Pictures/PiSlider" style="flex:1;"
+                            onchange="sendCmd('set_save_path', {value:this.value})">
+                        <button onclick="openFolderBrowser()"
+                            style="white-space:nowrap; flex-shrink:0; padding:6px 10px;">
+                            Browse…
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Relay / Lighting Controls -->
+                <div class="row" style="margin-top:10px; gap:8px;">
+                    <button class="relay-btn" id="relay1_btn" onclick="toggleRelay(1)">
+                        Ring Light <span id="relay1_state">OFF</span>
+                    </button>
+                    <button class="relay-btn" id="relay2_btn" onclick="toggleRelay(2)">
+                        Laser Grid <span id="relay2_state">OFF</span>
+                    </button>
+                </div>
+
+                <!-- High Power Mode -->
+                <div class="row" style="margin-top:8px; gap:8px; align-items:center;">
+                    <label class="toggle-label" style="flex:1;">
+                        <input type="checkbox" id="high_power_mode" onchange="sendCmd('cinematic_set_high_power',
+                                        {enabled: this.checked})">
+                        High Power Mode
+                    </label>
+                    <span style="font-size:0.65rem; color:var(--text-muted); flex:2;">
+                        ~1.2A run current — for steep rail angles / heavy loads
+                    </span>
+                </div>
+            </section>
+
+            <!-- ══════════════════════════════════════════════════ -->
+            <!-- EXPOSURE ENGINE                                     -->
+            <!-- ══════════════════════════════════════════════════ -->
+            <section id="exposure_panel" class="group-box">
+                <h3 class="group-title">Exposure Engine</h3>
+
+                <!-- HG override notice — shown when HG is enabled -->
+                <div id="hg_override_notice" class="readout-card" style="
+                    display:none; background:#1a1200; border-color:var(--accent-gold);
+                    color:var(--accent-gold); font-size:0.75rem; margin-bottom:10px; text-align:center;">
+                    ⚠ Holy Grail mode is active — exposure is controlled automatically
+                </div>
+
+                <div id="remote_controls">
+                    <!-- AE / AWB toggles -->
+                    <div class="row" style="margin-bottom:10px; gap:16px;">
+                        <label class="toggle-label">
+                            <input type="checkbox" id="ae_toggle" checked onchange="sendPicamSettings()">
+                            Auto Exposure
+                        </label>
+                        <label class="toggle-label">
+                            <input type="checkbox" id="awb_toggle" checked onchange="sendPicamSettings()">
+                            Auto WB
+                        </label>
+                    </div>
+
+                    <!-- Shutter — quarter-stop slider -->
+                    <div class="control-item">
+                        <label>Shutter: <span id="shutter_label">1/125</span></label>
+                        <input type="range" id="shutter_slider" min="0" max="100" value="50"
+                            oninput="onShutterSlider(this.value)">
+                    </div>
+
+                    <!-- ISO — quarter-stop slider -->
+                    <div class="control-item">
+                        <label>ISO: <span id="iso_label">400</span></label>
+                        <input type="range" id="iso_slider" min="0" max="100" value="30"
+                            oninput="onISOSlider(this.value)">
+                    </div>
+
+                    <!-- Kelvin / WB slider -->
+                    <div class="control-item">
+                        <label>White Balance: <span id="wb_label">5500K</span></label>
+                        <input type="range" id="wb_slider" min="2500" max="10000" step="50" value="5500"
+                            oninput="onWBSlider(this.value)">
+                    </div>
+                </div>
+
+                <div class="control-item" style="margin-top:8px;">
+                    <label>Trigger Pulse Status</label>
+                    <div id="shutter_indicator" class="readout-card" style="color:var(--text-dim)">READY</div>
+                </div>
+
+                <button onclick="sendCmd('take_preview')" class="mode-btn" style="width:100%; margin-top:8px;">
+                    Take Preview Shot
+                </button>
+            </section>
+
+            <!-- ══════════════════════════════════════════════════ -->
+            <!-- SEQUENCE SETTINGS  (timelapse only)                 -->
+            <!-- ══════════════════════════════════════════════════ -->
+            <section class="group-box" id="sequence_settings_panel">
+                <h3 class="group-title">Sequence Settings</h3>
+
+                <!-- Frame Count vs Start/End toggle -->
+                <div class="row" style="margin-bottom:8px; gap:12px;">
+                    <label class="toggle-label">
+                        <input type="radio" name="seq_mode" value="frames" checked onchange="onSeqModeChange('frames')">
+                        Frame Count
+                    </label>
+                    <label class="toggle-label">
+                        <input type="radio" name="seq_mode" value="duration" onchange="onSeqModeChange('duration')">
+                        Start / End Time
+                    </label>
+                </div>
+
+                <!-- Frame count row -->
+                <div id="seq_frames_row">
+                    <div class="control-item">
+                        <label>Frame Count</label>
+                        <input type="number" id="total_frames" value="300" step="10" min="1"
+                            onchange="sendCmd('set_total_frames', {value:parseInt(this.value)}); _updatePathSummary();">
+                    </div>
+                    <!-- Interval — only shown when HG is disabled -->
+                    <div class="control-item" id="manual_interval_row" style="margin-top:6px;">
+                        <label>Interval (s) <span style="color:var(--text-dim); font-weight:normal;">— per-phase
+                                intervals set in HG when enabled</span></label>
+                        <input type="number" id="manual_interval" value="5.0" step="0.5" min="0.5"
+                            oninput="_updatePathSummary()"
+                            onchange="sendCmd('set_manual_interval',{value:parseFloat(this.value)||5}); log('⏱ Interval set to ' + (parseFloat(this.value)||5) + 's');">
+                    </div>
+                </div>
+
+                <!-- Duration row (hidden by default) -->
+                <div id="seq_duration_row" style="display:none;">
+                    <div class="control-item">
+                        <label>Start Time</label>
+                        <input type="datetime-local" id="seq_start_time" style="width:100%;box-sizing:border-box;">
+                    </div>
+                    <div class="control-item">
+                        <label>End Time</label>
+                        <input type="datetime-local" id="seq_end_time" style="width:100%;box-sizing:border-box;">
+                    </div>
+                    <div class="control-item">
+                        <label>Interval (s)</label>
+                        <input type="number" id="hg_int_dur" value="5.0" step="0.5" min="1">
+                    </div>
+                    <div class="readout-card" id="seq_duration_calc" style="font-size:0.75rem; margin-top:4px;">
+                        — frames estimated
+                    </div>
+                </div>
+
+                <div class="row" style="margin-top:6px;">
+                    <div class="control-item half">
+                        <label>Vibe Delay (s)</label>
+                        <input type="number" id="vibe_delay" value="1.0" step="0.1" min="0">
+                    </div>
+                    <div class="control-item half">
+                        <label>Exp Margin (s)</label>
+                        <input type="number" id="exp_margin" value="0.2" step="0.1" min="0">
+                    </div>
+                </div>
+
+                <!-- Sidecar pre-roll -->
+                <div class="row" style="margin-top:6px;">
+                    <div class="control-item half">
+                        <label>Pre-roll (s)
+                            <span style="color:var(--text-dim); font-size:0.7em; font-weight:normal;
+                                         display:block; margin-top:2px;">held at start before motion</span>
+                        </label>
+                        <input type="number" id="tl_preroll" value="0" step="1" min="0"
+                            onchange="sendCmd('set_tl_preroll',{seconds:parseFloat(this.value)||0})">
+                    </div>
+                </div>
+
+                <!-- Trigger Mode -->
+                <div id="trigger_section">
+                    <div class="sub-group-title" style="margin-top:10px;">Shutter Trigger Mode</div>
+                    <div class="radio-group">
+                        <label>
+                            <input type="radio" name="trigger_mode" value="normal" checked
+                                onchange="onTriggerModeChange('normal')">
+                            Normal (interval timer)
+                        </label>
+                        <label>
+                            <input type="radio" name="trigger_mode" value="aux_only"
+                                onchange="onTriggerModeChange('aux_only')">
+                            AUX Only — wait for external trigger each shot
+                        </label>
+                        <label>
+                            <input type="radio" name="trigger_mode" value="aux_hybrid"
+                                onchange="onTriggerModeChange('aux_hybrid')">
+                            AUX Hybrid — trigger OR interval, whichever first
+                        </label>
+                        <label>
+                            <input type="radio" name="trigger_mode" value="picam_motion_only"
+                                onchange="onTriggerModeChange('picam_motion_only')">
+                            Camera Motion Only — fire on motion detection (PiCam)
+                        </label>
+                        <label>
+                            <input type="radio" name="trigger_mode" value="picam_motion_hybrid"
+                                onchange="onTriggerModeChange('picam_motion_hybrid')">
+                            Camera Motion Hybrid — motion OR interval, whichever first
+                        </label>
+                    </div>
+
+                    <!-- AUX manual fire -->
+                    <button id="auxFireBtn"
+                        style="width:100%; margin-top:8px; border-color:var(--accent-gold); color:var(--accent-gold);"
+                        onclick="sendCmd('aux_trigger')">
+                        ⚡ Fire AUX Trigger (Manual)
+                    </button>
+
+                    <!-- Motion detection settings — shown for picam_motion modes -->
+                    <div id="motion_settings" style="display:none; margin-top:10px;">
+                        <div class="sub-group-title">Motion Detection Zone</div>
+                        <!-- Note shown when non-picam camera selected -->
+                        <div id="motion_camera_note" class="readout-card" style="
+                        display:none; background:#1a1200; border-color:var(--accent-gold);
+                        color:var(--accent-gold); font-size:0.72rem; margin-bottom:6px;">
+                            ℹ Using PiCam preview for detection even though capture is via Sony/S2
+                        </div>
+                        <div class="readout-card" style="font-size:0.75rem; margin-bottom:8px; text-align:left;">
+                            <b>Drag the box corners</b> on the live feed to define the watch zone.
+                            Drag inside the box to move it. Double-click feed to re-center loupe.
+                        </div>
+                        <div class="row">
+                            <div class="control-item third">
+                                <label>Sensitivity
+                                    <span style="color:var(--text-dim); font-size:0.7em; font-weight:normal;
+                                             display:block; margin-top:2px;">
+                                        lower = more sensitive
+                                    </span>
+                                </label>
+                                <input type="number" id="motion_threshold" value="2000" step="500" min="200"
+                                    onchange="sendMotionSettings()">
+                            </div>
+                            <div class="control-item third">
+                                <label>Warmup
+                                    <span style="color:var(--text-dim); font-size:0.7em; font-weight:normal;
+                                             display:block; margin-top:2px;">
+                                        frames
+                                        frames before triggers fire
+                                    </span>
+                                </label>
+                                <input type="number" id="motion_warmup" value="10" step="1" min="1"
+                                    onchange="sendMotionSettings()">
+                            </div>
+                            <div class="control-item third">
+                                <label>Cooldown
+                                    <span style="color:var(--text-dim); font-size:0.7em; font-weight:normal;
+                                             display:block; margin-top:2px;">
+                                        seconds between
+                                    </span>
+                                </label>
+                                <input type="number" id="motion_cooldown" value="2.0" step="0.1" min="0"
+                                    onchange="sendMotionSettings()">
+                            </div>
+                        </div>
+                        <div class="readout-card" id="motion_roi_readout"
+                            style="font-size:0.72rem; margin-top:4px; color:var(--accent-teal);">
+                            Zone: full frame
+                        </div>
+                    </div>
+                </div><!-- end trigger_section -->
+
+
+            </section><!-- end Sequence Settings -->
+
+            <!-- ══════════════════════════════════════════════════ -->
+            <!-- HOLY GRAIL ADAPTIVE                                 -->
+            <!-- ══════════════════════════════════════════════════ -->
+            <section class="group-box" id="hg_section">
+
+                <!-- HG-only controls: title, enable toggle, calibration.
+                     Hidden in cinematic and macro modes. -->
+                <div id="hg_timelapse_only">
+                <h3 class="group-title">Holy Grail Adaptive</h3>
+
+                <label class="toggle-label" style="margin-bottom:10px; display:flex; gap:8px; align-items:center;">
+                    <input type="checkbox" id="hg_enabled" checked onchange="sendHGSettings(); updateHGExposureLock();">
+                    Enable Holy Grail Mode
+                </label>
+
+                <!-- ── COMPASS CALIBRATION ── -->
+                <div class="sub-group-title">Rig Calibration</div>
+                <div class="guide-box" style="margin-bottom:10px;">
+                    <h4 class="guide-title">Bearing Reference Calibration</h4>
+                    <p class="guide-text" style="margin-bottom:6px; display:block;">
+                        Point the camera level at a known compass bearing, then click <b>Set Ref + Calibrate</b>.
+                        The system will zero the motor odometer to that angle so all subsequent
+                        positions, keyframes and sky-map sweeps use real-world bearings.
+                    </p>
+                    <div class="row" style="gap:6px; margin-bottom:6px; align-items:flex-end;">
+                        <div class="control-item" style="flex:1; margin-bottom:0;">
+                            <label>Reference Bearing</label>
+                            <select id="calib_bearing">
+                                <option value="0">N — 0°</option>
+                                <option value="45">NE — 45°</option>
+                                <option value="90" selected>E — 90°</option>
+                                <option value="135">SE — 135°</option>
+                                <option value="180">S — 180°</option>
+                                <option value="225">SW — 225°</option>
+                                <option value="270">W — 270°</option>
+                                <option value="315">NW — 315°</option>
+                                <option value="custom">Custom °</option>
+                            </select>
+                        </div>
+                        <div class="control-item" style="flex:0.6; margin-bottom:0;" id="calib_custom_wrap"
+                            style="display:none;">
+                            <label>Custom (°)</label>
+                            <input type="number" id="calib_custom_deg" value="90" step="1" min="0" max="359">
+                        </div>
+                    </div>
+
+                    <!-- Nudge controls for fine aim -->
+                    <div class="sub-group-title" style="margin-top:4px;">Fine Aim (Nudge)</div>
+                    <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px;">
+                        <button class="nudge-btn" onclick="nudgeAxis('pan', -10)">◀◀ 10°</button>
+                        <button class="nudge-btn" onclick="nudgeAxis('pan', -1)">◀ 1°</button>
+                        <button class="nudge-btn" onclick="nudgeAxis('pan', -0.1)">◀ 0.1°</button>
+                        <button class="nudge-btn" onclick="nudgeAxis('pan', 0.1)">0.1° ▶</button>
+                        <button class="nudge-btn" onclick="nudgeAxis('pan', 1)">1° ▶</button>
+                        <button class="nudge-btn" onclick="nudgeAxis('pan', 10)">10° ▶▶</button>
+                    </div>
+                    <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px;">
+                        <button class="nudge-btn" onclick="nudgeAxis('tilt', -5)">▼▼ 5°</button>
+                        <button class="nudge-btn" onclick="nudgeAxis('tilt', -0.5)">▼ 0.5°</button>
+                        <button class="nudge-btn" onclick="nudgeAxis('tilt', 0.5)">▲ 0.5°</button>
+                        <button class="nudge-btn" onclick="nudgeAxis('tilt', 5)">▲▲ 5°</button>
+                    </div>
+
+                    <div id="calib_readout" class="readout-card"
+                        style="font-size:0.75rem; text-align:left; margin-bottom:8px; color:var(--text-dim);">
+                        NOT CALIBRATED — Pan: —° Tilt: —°
+                    </div>
+                    <button class="mode-btn" style="width:100%;" onclick="calibrateOrigin()">
+                        ✦ Set Reference &amp; Calibrate Origin
+                    </button>
+                </div>
+
+                </div><!-- end hg_timelapse_only -->
+
+                <!-- ── RIG SETUP: Hardware Zero + Soft Limits ── all modes ── -->
+                <button class="collapsible-btn" id="rig_setup_btn" onclick="toggleRigSetup()"
+                        style="margin-top:10px; margin-bottom:0; background:rgba(232,125,38,0.08);
+                               border-color:rgba(232,125,38,0.4); color:var(--accent);">
+                    ⬡ Rig Setup
+                    <span id="side_speed_badge" style="font-size:0.6rem; font-weight:400;
+                                 color:var(--accent-gold); padding:2px 6px; margin-left:6px;
+                                 border:1px solid var(--accent-gold); border-radius:10px;">
+                        CRAWL ONLY
+                    </span>
+                    <span id="rig_setup_arrow" style="float:right;">▼</span>
+                </button>
+                <div id="rig_setup_content" style="display:block;">
+
+                    <!-- ── Step 1: Hardware Zero ── -->
+                    <div style="background:rgba(232,125,38,0.07); border:1px solid rgba(232,125,38,0.3);
+                                border-radius:6px; padding:8px 10px; margin-bottom:8px; margin-top:6px;">
+                        <div style="font-size:0.68rem; color:var(--text-muted); margin-bottom:6px; line-height:1.5;">
+                            <b style="color:var(--accent);">Step 1 — Home Position</b><br>
+                            Park gantry at rail <b>centre</b>, camera <b>level</b> &amp;
+                            <b>perpendicular</b> to rail. This becomes coordinate zero —
+                            all limits and keyframes measure from here.
+                        </div>
+                        <div class="row" style="gap:6px; margin-bottom:5px;">
+                            <button class="mode-btn" id="hwZeroBtn"
+                                style="flex:1; font-size:0.75rem; padding:9px 6px;
+                                       background:rgba(232,125,38,0.18); border-color:var(--accent);"
+                                onclick="hardwareZero()"
+                                title="Sets all axis positions to 0. Do this once per session before recording limits or keyframes.">
+                                🎯 I'm at Home → Zero All Axes
+                            </button>
+                            <button class="mode-btn macroMovementBtn" id="goHomeBtn" onclick="goHome()"
+                                style="flex:1; font-size:0.75rem; padding:9px 6px;">
+                                🏠 Go to Home
+                            </button>
+                        </div>
+                        <div id="hw_zero_status" style="font-size:0.65rem; color:var(--text-muted);
+                             font-family:monospace; text-align:center; margin-top:5px;">
+                            not zeroed this session
+                        </div>
+                    </div>
+
+                    <!-- ── Step 2: Soft Limits ── -->
+                    <div style="font-size:0.68rem; color:var(--text-muted); margin-bottom:6px;">
+                        <b style="color:var(--text-dim);">Step 2 — Soft Limits</b>
+                        &nbsp;— jog to furthest safe position, press Set.
+                    </div>
+
+                <div style="margin-bottom:8px;">
+                    <!-- Slider limits -->
+                    <div class="hg-limit-cal">
+                        <div style="font-size:0.7rem; color:var(--text-dim); margin-bottom:4px;">
+                            SLIDER <span id="side_slider_cal" style="float:right; color:var(--text-muted);">uncalibrated</span>
+                        </div>
+                        <div class="row" style="gap:4px; margin-bottom:2px;">
+                            <button class="mode-btn" onclick="calibrateLimit('slider','min')"
+                                style="flex:1; font-size:0.65rem;">← MIN</button>
+                            <div id="side_slider_bar" class="limit-bar-track" style="flex:3; height:20px; background:#1a1a1a;
+                                 border:1px solid #333; border-radius:4px; position:relative; overflow:hidden;">
+                                <div id="side_slider_pos" style="position:absolute; top:0; bottom:0;
+                                     width:3px; background:var(--accent-teal); left:50%; transform: translateX(-50%);"></div>
+                            </div>
+                            <button class="mode-btn" onclick="calibrateLimit('slider','max')"
+                                style="flex:1; font-size:0.65rem;">MAX →</button>
+                        </div>
+                        <label class="toggle-label" style="font-size:0.65rem; color:var(--text-muted); margin-bottom:8px;">
+                            <input type="checkbox" id="side_slider_inv" onchange="sendInversion('slider')"> Invert Slider
+                        </label>
+                    </div>
+
+                    <!-- Pan limits -->
+                    <div class="hg-limit-cal">
+                        <div style="font-size:0.7rem; color:var(--text-dim); margin-bottom:4px;">
+                            PAN <span id="side_pan_cal" style="float:right; color:var(--text-muted);">uncalibrated</span>
+                        </div>
+                        <div class="row" style="gap:4px; margin-bottom:2px;">
+                            <button class="mode-btn" onclick="calibrateLimit('pan','min')"
+                                style="flex:1; font-size:0.65rem;">← MIN</button>
+                            <div id="side_pan_bar" class="limit-bar-track" style="flex:3; height:20px; background:#1a1a1a;
+                                 border:1px solid #333; border-radius:4px; position:relative; overflow:hidden;">
+                                <div id="side_pan_pos" style="position:absolute; top:0; bottom:0;
+                                     width:3px; background:var(--accent-teal); left:50%; transform: translateX(-50%);"></div>
+                            </div>
+                            <button class="mode-btn" onclick="calibrateLimit('pan','max')"
+                                style="flex:1; font-size:0.65rem;">MAX →</button>
+                        </div>
+                        <label class="toggle-label" style="font-size:0.65rem; color:var(--text-muted); margin-bottom:8px;">
+                            <input type="checkbox" id="side_pan_inv" onchange="sendInversion('pan')"> Invert Pan
+                        </label>
+                    </div>
+
+                    <!-- Tilt limits -->
+                    <div class="hg-limit-cal">
+                        <div style="font-size:0.7rem; color:var(--text-dim); margin-bottom:4px;">
+                            TILT <span id="side_tilt_cal" style="float:right; color:var(--text-muted);">uncalibrated</span>
+                        </div>
+                        <div class="row" style="gap:4px; margin-bottom:2px;">
+                            <button class="mode-btn" onclick="calibrateLimit('tilt','min')"
+                                style="flex:1; font-size:0.65rem;">← MIN</button>
+                            <div id="side_tilt_bar" class="limit-bar-track" style="flex:3; height:20px; background:#1a1a1a;
+                                 border:1px solid #333; border-radius:4px; position:relative; overflow:hidden;">
+                                <div id="side_tilt_pos" style="position:absolute; top:0; bottom:0;
+                                     width:3px; background:var(--accent-teal); left:50%; transform: translateX(-50%);"></div>
+                            </div>
+                            <button class="mode-btn" onclick="calibrateLimit('tilt','max')"
+                                style="flex:1; font-size:0.65rem;">MAX →</button>
+                        </div>
+                        <label class="toggle-label" style="font-size:0.65rem; color:var(--text-muted); margin-bottom:8px;">
+                            <input type="checkbox" id="side_tilt_inv" onchange="sendInversion('tilt')"> Invert Tilt
+                        </label>
+                    </div>
+                </div>
+
+                <div class="readout-card" id="limits_readout" style="font-size:0.72rem; text-align:left; margin-bottom:12px;">
+                    Pan: —° → —° &nbsp;|&nbsp; Tilt: —° → —°
+                </div>
+
+                </div><!-- end rig_setup_content -->
+
+                <!-- HG Location / Camera orientation — timelapse only -->
+                <div id="hg_timelapse_only_2">
+                <!-- Location -->
+                <div class="sub-group-title">Location</div>
+                <div class="row" style="align-items:flex-end; gap:6px;">
+                    <div class="control-item half">
+                        <label>Latitude</label>
+                        <input type="number" id="hg_lat" value="49.8951" step="0.0001" onchange="sendHGSettings()">
+                    </div>
+                    <div class="control-item half">
+                        <label>Longitude</label>
+                        <input type="number" id="hg_lon" value="-97.1384" step="0.0001" onchange="sendHGSettings()">
+                    </div>
+                    <button id="gpsBtn" onclick="grabGPS()" title="Auto-fill from browser GPS" style="flex-shrink:0; padding:6px 10px; margin-bottom:2px;
+                                   background:none; border:1px solid #444; color:#888;
+                                   border-radius:6px; cursor:pointer; font-size:0.85rem;
+                                   white-space:nowrap;">
+                        📍
+                    </button>
+                </div>
+                <div class="control-item">
+                    <label>Timezone</label>
+                    <input type="text" id="hg_tz" value="America/Winnipeg">
+                </div>
+
+                <!-- Camera Orientation -->
+                <div class="sub-group-title" style="margin-top:10px;">Camera Orientation</div>
+                <div class="row">
+                    <div class="control-item half">
+                        <label>Camera Az (°)</label>
+                        <input type="number" id="hg_cam_az" value="180" step="1">
+                    </div>
+                    <div class="control-item half">
+                        <label>Camera Alt (°)</label>
+                        <input type="number" id="hg_cam_alt" value="0" step="1">
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="control-item half">
+                        <label>HFOV (°)</label>
+                        <input type="number" id="hg_hfov" value="60" step="1">
+                    </div>
+                    <div class="control-item half">
+                        <label>VFOV (°)</label>
+                        <input type="number" id="hg_vfov" value="40" step="1">
+                    </div>
+                </div>
+                <div id="lens_info_readout" style="display:none; font-size:0.7rem;
+                     color:var(--accent-blue); margin-top:4px; margin-bottom:2px;"></div>
+                <button class="mode-btn" style="width:100%; font-size:0.75rem; padding:7px; margin-top:4px;"
+                    onclick="readLensData()"
+                    title="Reads focal length from EXIF of the most recent local RAW file (PiCam DNG or Sony USB ARW). Take a preview shot first if none exist.">
+                    🔭 Read FOV from Last Shot
+                </button>
+
+                <!-- HG Advanced — collapsible -->
+                <button class="collapsible-btn" onclick="toggleAdvanced('hg_advanced')" style="margin-top:12px;">
+                    Advanced Settings ▼
+                </button>
+                <div id="hg_advanced" class="collapsible-content">
+
+                    <!-- Night scene presets — image thumbnails -->
+                    <div class="sub-group-title">Night Scene</div>
+                    <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:5px; margin-bottom:4px;">
+
+                        <div id="preset_dark_sky" onclick="applyNightPreset('dark_sky')"
+                             style="cursor:pointer; border:2px solid transparent; border-radius:6px; overflow:hidden;"
+                             title="Dark Sky / Milky Way — max exposure, ISO 6400 / 25s cold start">
+                            <img src="/night_thumbs/night%20stars.jpg"
+                                 style="width:100%; aspect-ratio:1/1; object-fit:cover; display:block;">
+                            <div style="font-size:0.6rem; text-align:center; padding:3px 2px;
+                                        line-height:1.2; color:var(--text-dim);">
+                                Dark Sky<br>Stars / MW
+                            </div>
+                        </div>
+
+                        <div id="preset_moonlit" onclick="applyNightPreset('moonlit')"
+                             style="cursor:pointer; border:2px solid transparent; border-radius:6px; overflow:hidden;"
+                             title="Moonlit landscape — foreground visible, ISO 3200 / 15s cold start">
+                            <img src="/night_thumbs/night%20with%20moon.jpg"
+                                 style="width:100%; aspect-ratio:1/1; object-fit:cover; object-position:center 20%; display:block;">
+                            <div style="font-size:0.6rem; text-align:center; padding:3px 2px;
+                                        line-height:1.2; color:var(--text-dim);">
+                                Moonlit<br>Landscape
+                            </div>
+                        </div>
+
+                        <div id="preset_landscape" onclick="applyNightPreset('landscape')"
+                             style="cursor:pointer; border:2px solid transparent; border-radius:6px; overflow:hidden;"
+                             title="Night landscape — no moon, foreground detail, ISO 6400 / 20s cold start">
+                            <img src="/night_thumbs/night%20landscape.jpg"
+                                 style="width:100%; aspect-ratio:1/1; object-fit:cover; display:block;">
+                            <div style="font-size:0.6rem; text-align:center; padding:3px 2px;
+                                        line-height:1.2; color:var(--text-dim);">
+                                Landscape<br>No Moon
+                            </div>
+                        </div>
+
+                        <div id="preset_urban" onclick="applyNightPreset('urban')"
+                             style="cursor:pointer; border:2px solid transparent; border-radius:6px; overflow:hidden;"
+                             title="Urban / city — artificial light, ISO 1600 / 8s cold start">
+                            <img src="/night_thumbs/night%20city%20scape.jpg"
+                                 style="width:100%; aspect-ratio:1/1; object-fit:cover; display:block;">
+                            <div style="font-size:0.6rem; text-align:center; padding:3px 2px;
+                                        line-height:1.2; color:var(--text-dim);">
+                                Urban<br>City
+                            </div>
+                        </div>
+
+                    </div>
+                    <div id="night_preset_note" style="font-size:0.62rem; color:var(--text-dim);
+                         margin-bottom:6px; line-height:1.4; display:none;"></div>
+
+                    <!-- EV targets -->
+                    <div class="sub-group-title" style="margin-top:10px;">
+                        EV Targets — Steady-State Brightness
+                        <span style="display:block; font-size:0.62rem; font-weight:400;
+                              color:var(--text-dim); margin-top:1px;">
+                            Lower = darker image (longer/higher exposure). Higher = brighter (shorter). Tracker steers here once warm.
+                        </span>
+                    </div>
+                    <div class="row">
+                        <div class="control-item quarter"><label>Day</label>
+                            <input type="number" id="hg_ev_day" value="13.0" step="0.5">
+                        </div>
+                        <div class="control-item quarter"><label>Golden</label>
+                            <input type="number" id="hg_ev_golden" value="10.0" step="0.5">
+                        </div>
+                        <div class="control-item quarter"><label>Twilight</label>
+                            <input type="number" id="hg_ev_twilight" value="6.0" step="0.5">
+                        </div>
+                        <div class="control-item quarter">
+                            <label>Night</label>
+                            <input type="number" id="hg_ev_night" value="3.0" step="0.5"
+                                oninput="updateEvNightHint()">
+                        </div>
+                    </div>
+                    <div id="ev_night_hint" style="font-size:0.65rem; color:var(--accent-teal);
+                         margin-top:3px; line-height:1.4;"></div>
+
+                    <div class="sub-group-title">Kelvin Targets</div>
+                    <div class="row">
+                        <div class="control-item quarter"><label>Day</label>
+                            <input type="number" id="hg_k_day" value="5500" step="50">
+                        </div>
+                        <div class="control-item quarter"><label>Golden</label>
+                            <input type="number" id="hg_k_golden" value="4800" step="50">
+                        </div>
+                        <div class="control-item quarter"><label>Twilight</label>
+                            <input type="number" id="hg_k_twilight" value="4200" step="50">
+                        </div>
+                        <div class="control-item quarter"><label>Night</label>
+                            <input type="number" id="hg_k_night" value="3500" step="50">
+                        </div>
+                    </div>
+
+                    <div class="sub-group-title">Interval Targets (s)</div>
+                    <div class="row">
+                        <div class="control-item quarter"><label>Day</label>
+                            <input type="number" id="hg_int_day" value="5.0" step="0.5">
+                        </div>
+                        <div class="control-item quarter"><label>Golden</label>
+                            <input type="number" id="hg_int_golden" value="7.0" step="0.5">
+                        </div>
+                        <div class="control-item quarter"><label>Twilight</label>
+                            <input type="number" id="hg_int_twilight" value="10.0" step="0.5">
+                        </div>
+                        <div class="control-item quarter"><label>Night</label>
+                            <input type="number" id="hg_int_night" value="20.0" step="0.5">
+                        </div>
+                    </div>
+
+                    <!-- ISO / Aperture limits -->
+                    <div class="sub-group-title">Camera Limits</div>
+                    <div class="row">
+                        <div class="control-item half"><label>ISO Min</label>
+                            <input type="number" id="hg_iso_min" value="100" step="100">
+                        </div>
+                        <div class="control-item half"><label>ISO Max</label>
+                            <input type="number" id="hg_iso_max" value="3200" step="100">
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="control-item half"><label>Aperture Day</label>
+                            <input type="number" id="hg_ap_day" value="5.6" step="0.1">
+                        </div>
+                        <div class="control-item half"><label>Aperture Night</label>
+                            <input type="number" id="hg_ap_night" value="2.8" step="0.1">
+                        </div>
+                    </div>
+
+                    <!-- Max shutter / bulb limit -->
+                    <div class="row" style="margin-top:6px">
+                        <div class="control-item full" style="font-size:0.78rem;color:var(--text-dim);line-height:1.4">
+                            Max shutter per phase — set ~2 s less than your interval.
+                            Sony cameras switch to <strong>bulb mode</strong> automatically beyond 30 s.
+                            Timing jitter is corrected in the sidecar file.
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="control-item half"><label>Max Shutter Twilight (s)</label>
+                            <input type="number" id="hg_shutter_max_twilight" value="20.0" step="1" min="1" max="670">
+                        </div>
+                        <div class="control-item half"><label>Max Shutter Night (s)</label>
+                            <input type="number" id="hg_shutter_max_night" value="25.0" step="1" min="1" max="670">
+                        </div>
+                    </div>
+                </div>
+                </div><!-- end hg_timelapse_only_2 -->
+            </section>
+
+            <!-- ══════════════════════════════════════════════════ -->
+            <!-- MOTION PATH  (shared — Timelapse + Cinematic)      -->
+            <!-- Keyframes here drive slider/pan/tilt in both modes.-->
+            <!-- Timelapse steps frame-by-frame through the path;   -->
+            <!-- Cinematic plays it back in real-time.              -->
+            <!-- ══════════════════════════════════════════════════ -->
+            <section class="group-box" id="motion_path_panel">
+                <h3 class="group-title">Motion Path
+                    <span id="path_kf_badge" style="font-size:0.65rem; font-weight:400;
+                          color:var(--text-muted); margin-left:6px;">0 keyframes</span>
+                </h3>
+                <div style="font-size:0.68rem; color:var(--text-muted); margin-top:-6px;
+                            margin-bottom:8px;">
+                    Shared by Timelapse &amp; Cinematic — load or build a path once, use in either mode
+                </div>
+
+                <!-- Timelapse motion status card — prominent, always visible in TL mode -->
+                <div id="tl_motion_card" style="display:none; border-radius:8px;
+                     padding:10px 12px; margin-bottom:10px;">
+                    <!-- filled dynamically by _updatePathSummary() -->
+                </div>
+
+                <!-- Path summary line (cinematic / no-keyframe fallback) -->
+                <div id="path_summary" style="font-size:0.72rem; color:var(--text-dim);
+                     margin-bottom:8px; font-family:monospace; min-height:1.2em;">
+                    No path — jog to position and add keyframes
+                </div>
+
+                <!-- Timelapse-specific stats (secondary detail block) -->
+                <div id="tl_path_stats" style="display:none; background:rgba(0,170,255,0.06);
+                     border:1px solid rgba(0,170,255,0.2); border-radius:6px;
+                     padding:6px 10px; margin-bottom:8px; font-size:0.7rem; font-family:monospace;">
+                    <div id="tl_stats_text" style="color:var(--text-dim);">—</div>
+                </div>
+
+                <!-- Origin offset warning — shown whenever origin is non-zero -->
+                <div id="originWarnBanner" style="display:none; background:rgba(255,80,80,0.12);
+                     border:1px solid var(--accent-red); border-radius:6px; padding:6px 10px;
+                     margin-bottom:6px; font-size:0.68rem; color:var(--accent-red);">
+                    ⚠ <b>Deployment origin is set</b> — motion path is offset from recorded positions.
+                    <button onclick="sendCmd('clear_origin')" style="margin-left:6px; font-size:0.65rem;
+                        padding:1px 8px; background:none; border:1px solid var(--accent-red);
+                        color:var(--accent-red); border-radius:3px; cursor:pointer;">
+                        ✕ Clear Origin
+                    </button>
+                </div>
+
+                <!-- Return to Start — timelapse mode, shown when path has ≥2 keyframes -->
+                <div id="tl_return_row" style="display:none; margin-bottom:8px;">
+                    <button id="returnToStartBtn" class="mode-btn" onclick="returnToStart()"
+                        style="width:100%; font-size:0.8rem; padding:9px;">
+                        ↩ Return to Start Position
+                    </button>
+                </div>
+
+                <!-- Cinematic-specific stats — visible in cinematic mode -->
+                <div id="cine_path_stats" style="display:none; background:rgba(0,170,255,0.06);
+                     border:1px solid rgba(0,170,255,0.2); border-radius:6px;
+                     padding:6px 10px; margin-bottom:8px; font-size:0.7rem; font-family:monospace;">
+                    <div style="color:var(--accent-teal); margin-bottom:2px;">
+                        Cinematic Playback</div>
+                    <div id="cine_stats_text" style="color:var(--text-dim);">—</div>
+                </div>
+
+                <!-- ── Path Planning Controls ── -->
+                <div style="background:var(--panel-dark); border:var(--border);
+                            border-radius:6px; padding:8px 10px; margin-bottom:8px;">
+
+                    <!-- Path mode row -->
+                    <div class="row" style="gap:6px; margin-bottom:6px; align-items:center;">
+                        <span style="font-size:0.7rem; color:var(--text-muted);
+                                     white-space:nowrap; flex:0 0 auto;">Path Mode</span>
+                        <button id="pathModeLinear"
+                                onclick="setPathMode('linear')"
+                                style="flex:1; padding:4px 6px; font-size:0.72rem;
+                                       background:var(--accent-teal); color:#000;
+                                       border:1px solid var(--accent-teal); border-radius:4px; cursor:pointer;">
+                            Linear</button>
+                        <button id="pathModeCatmull"
+                                onclick="setPathMode('catmull_rom')"
+                                style="flex:1; padding:4px 6px; font-size:0.72rem;
+                                       background:none; color:#555;
+                                       border:1px solid #333; border-radius:4px; cursor:pointer;">
+                            Catmull-Rom</button>
+                    </div>
+
+                    <!-- Catmull-Rom tension (hidden until CR mode active) -->
+                    <div id="catmullTensionRow" style="display:none; margin-bottom:6px;">
+                        <div class="row" style="align-items:center; gap:8px;">
+                            <span style="font-size:0.7rem; color:var(--text-muted);
+                                         flex:0 0 auto;">Tension</span>
+                            <input type="range" id="catmullTensionSlider"
+                                   min="0" max="1.5" step="0.05" value="0.5"
+                                   style="flex:1;"
+                                   oninput="setCatmullTension(this.value)">
+                            <span id="catmullTensionVal"
+                                  style="font-size:0.7rem; color:var(--text-dim);
+                                         font-family:monospace; flex:0 0 34px; text-align:right;">
+                                0.50</span>
+                        </div>
+                        <div style="font-size:0.62rem; color:var(--text-muted); margin-top:2px;">
+                            0 = tight · 0.5 = smooth · 1.5 = relaxed
+                        </div>
+                    </div>
+
+                    <!-- Global easing row -->
+                    <div class="row" style="align-items:center; gap:6px;">
+                        <span style="font-size:0.7rem; color:var(--text-muted);
+                                     flex:0 0 auto;">Easing</span>
+                        <select id="globalEasingSelect"
+                                onchange="setGlobalEasing(this.value)"
+                                style="flex:1; font-size:0.75rem; padding:3px 5px;
+                                       background:var(--panel-dark); color:var(--text-main);
+                                       border:var(--border); border-radius:4px;">
+                            <option value="cycloid">Cycloid (default)</option>
+                            <option value="gaussian">Gaussian (ease in-out)</option>
+                            <option value="parabolic">Parabolic (ease in)</option>
+                            <option value="inverted_parabolic">Inv. Parabolic (ease out)</option>
+                            <option value="even">Even (constant)</option>
+                            <option value="linear">Linear</option>
+                            <option value="catenary">Catenary</option>
+                            <option value="ellipsoidal">Ellipsoidal</option>
+                            <option value="lame">Lamé</option>
+                        </select>
+                        <button onclick="sendCmd('cinematic_apply_global_easing')"
+                                style="flex:0 0 auto; padding:3px 8px; font-size:0.68rem;
+                                       background:none; color:var(--text-dim);
+                                       border:var(--border); border-radius:4px; cursor:pointer;"
+                                title="Apply current easing to every segment">
+                            Apply all</button>
+                    </div>
+                </div>
+
+                <!-- ── Scale Total Duration ── -->
+                <!-- Only meaningful when ≥2 keyframes exist; shown by JS when kfs present -->
+                <div id="scaleDurPanel" style="display:none; background:rgba(255,210,80,0.06);
+                     border:1px solid rgba(255,210,80,0.2); border-radius:6px;
+                     padding:7px 10px; margin-bottom:8px;">
+                    <div style="font-size:0.68rem; color:var(--accent-gold);
+                                margin-bottom:5px; font-weight:600;">
+                        ⏱ Total Duration</div>
+                    <div class="row" style="gap:8px; align-items:center;">
+                        <span style="font-size:0.7rem; color:var(--text-muted);
+                                     flex:0 0 auto;">Current:</span>
+                        <span id="currentTotalDur" style="font-size:0.72rem;
+                              color:var(--text-dim); font-family:monospace;
+                              flex:0 0 auto;">—</span>
+                        <span style="flex:1;"></span>
+                        <span style="font-size:0.7rem; color:var(--text-muted);
+                                     flex:0 0 auto;">Scale to:</span>
+                        <input type="number" id="scaleDurInput" min="1" step="1"
+                               value="10"
+                               style="width:60px; font-size:0.8rem; padding:3px 5px;
+                                      flex:0 0 auto;"
+                               onkeydown="if(event.key==='Enter') scaleAllDurations()">
+                        <span style="font-size:0.7rem; color:var(--text-muted);
+                                     flex:0 0 auto;">s</span>
+                        <button onclick="scaleAllDurations()"
+                                style="flex:0 0 auto; padding:4px 10px; font-size:0.72rem;
+                                       background:var(--accent-gold); color:#000;
+                                       border:none; border-radius:4px; cursor:pointer;
+                                       font-weight:600;">
+                            Scale</button>
+                    </div>
+                    <div style="font-size:0.62rem; color:var(--text-muted); margin-top:3px;">
+                        Proportions between segments are preserved when scaling.
+                    </div>
+                </div>
+
+                <!-- Keyframe list -->
+                <div id="cine_kf_list" style="margin-bottom:8px; max-height:260px;
+                     overflow-y:auto; border:var(--border); border-radius:6px;
+                     background:var(--panel-dark);">
+                    <div style="color:var(--text-muted); font-size:0.72rem;
+                                text-align:center; padding:12px 0;">
+                        No keyframes. Jog to position and click Add.
+                    </div>
+                </div>
+                <div class="row" style="gap:6px; margin-bottom:10px;">
+                    <button class="mode-btn" onclick="addKeyframeAtCurrent()" style="flex:2;">
+                        + Add Keyframe Here</button>
+                    <button id="reverse_move_btn" class="mode-btn"
+                        onclick="sendCmd('cinematic_reverse_move')"
+                        style="flex:1; font-size:0.68rem;"
+                        title="Reverse move direction — record clip moving backward so reverse playback matches the plate">
+                        ⇄ Reverse</button>
+                    <button class="mode-btn" onclick="sendCmd('cinematic_clear_keyframes')"
+                        style="flex:1; font-size:0.68rem; color:var(--accent-red);">
+                        Clear All</button>
+                </div>
+
+                <!-- ── Deployment Alignment ── -->
+                <div class="sub-group-title">Deployment</div>
+
+                <!-- Normal workflow: hardware zero → Return to Start -->
+                <div style="background:rgba(51,170,80,0.07); border:1px solid rgba(51,170,80,0.25);
+                            border-radius:6px; padding:8px 10px; margin-bottom:8px;
+                            font-size:0.68rem; color:var(--text-muted); line-height:1.6;">
+                    <b style="color:var(--accent-green,#3a7);">Normal workflow:</b><br>
+                    1. Zero hardware at home (Rig Setup panel)<br>
+                    2. Record or load keyframes<br>
+                    3. Tap <b>↩ Return to Start</b> — rig moves to correct position automatically
+                </div>
+
+                <!-- Advanced: manual origin override -->
+                <details style="margin-bottom:8px;">
+                    <summary style="font-size:0.68rem; color:var(--text-muted); cursor:pointer;
+                                    list-style:none; display:flex; align-items:center; gap:4px;">
+                        <span style="font-size:0.75rem;">▸</span> Advanced — redeploy at different location
+                    </summary>
+                    <div style="margin-top:6px; padding:8px; background:var(--panel-dark);
+                                border-radius:4px; border:var(--border);">
+                        <div style="font-size:0.62rem; color:var(--text-muted); margin-bottom:6px;">
+                            Use when placing the slider in a different physical spot from where keyframes were recorded.
+                            Park at your start position and tap to re-anchor keyframe[0] there.
+                        </div>
+                        <div class="row" style="gap:6px; margin-bottom:6px; align-items:center;">
+                            <button class="mode-btn" onclick="sendCmd('cinematic_set_origin')"
+                                style="flex:2; font-size:0.72rem;">📍 I'm at Start → Set Origin</button>
+                            <div id="cine_origin_disp" style="flex:2; font-size:0.65rem;
+                                 color:var(--text-dim); font-family:monospace;">not set</div>
+                            <button id="clearOriginBtn" onclick="sendCmd('clear_origin')"
+                                style="display:none; flex:1; font-size:0.65rem; padding:3px 6px;
+                                       background:none; border:1px solid var(--accent-red);
+                                       color:var(--accent-red); border-radius:4px; cursor:pointer;">
+                                ✕ Clear
+                            </button>
+                        </div>
+                        <div style="font-size:0.62rem; color:var(--text-muted); margin-bottom:4px;">
+                            Optionally save a reproducible reference spot (e.g. rail centre, horizon) with the move for future redeployment.
+                        </div>
+                        <div class="row" style="gap:6px; align-items:center;">
+                            <button class="mode-btn" onclick="sendCmd('cinematic_save_reference_point')"
+                                style="flex:2; font-size:0.7rem;">🏠 Save Reference Spot</button>
+                            <div id="cine_ref_disp" style="flex:3; font-size:0.65rem;
+                                 color:var(--text-dim); font-family:monospace;">not saved</div>
+                        </div>
+                    </div>
+                </details>
+
+                <!-- Reference point system (advanced, hidden until move with ref is loaded) -->
+                <div id="cine_at_ref_row" style="display:none; margin-bottom:10px;">
+                    <div style="font-size:0.62rem; color:var(--text-muted); margin-bottom:4px;">
+                        This move has a saved reference point. Jog to that spot, tap Auto-Align, then Return to Start.
+                    </div>
+                    <button class="mode-btn" onclick="sendCmd('cinematic_at_reference')"
+                        style="width:100%; font-size:0.8rem; padding:9px;
+                               background:rgba(232,125,38,0.15); border-color:var(--accent);">
+                        ⬡ I'm at Reference → Auto-Align to Start
+                    </button>
+                    <div style="font-size:0.62rem; color:var(--text-muted); margin-top:3px;">
+                        Jog to your reference spot, tap this, then use ↩ Return to Start.
+                    </div>
+                </div>
+
+                <!-- Saved Move Library -->
+                <div class="sub-group-title">Saved Moves</div>
+                <div class="row" style="gap:6px; margin-bottom:6px;">
+                    <input type="text" id="cine_move_name" placeholder="Move name…"
+                        style="flex:3; font-size:0.8rem; padding:5px 8px;">
+                    <button class="mode-btn" onclick="saveCurrentMove()"
+                        style="flex:1; font-size:0.68rem;">💾 Save</button>
+                </div>
+                <div id="cine_move_library" style="max-height:200px; overflow-y:auto;
+                     border:var(--border); border-radius:6px; background:var(--panel-dark);">
+                    <div style="color:var(--text-muted); font-size:0.72rem;
+                                text-align:center; padding:12px;">No saved moves.</div>
+                </div>
+            </section>
+
+            <!-- ══════════════════════════════════════════════════ -->
+            <!-- CINEMATIC MODE                                      -->
+            <!-- ══════════════════════════════════════════════════ -->
+            <section class="group-box" id="cinematic_panel" style="display:none;">
+                <h3 class="group-title">Cinematic Motion Control</h3>
+
+                <!-- Live / Programmed sub-mode toggle -->
+                <div class="row" style="gap:6px; margin-bottom:10px;">
+                    <button class="mode-btn active" id="cineModeLive" onclick="setCineSubMode('live')"
+                        style="flex:1;">🎮 Live</button>
+                    <button class="mode-btn" id="cineModeProg" onclick="setCineSubMode('programmed')" style="flex:1;">🎬
+                        Programmed</button>
+                </div>
+
+                <!-- ── RECORD CONTROLS (always visible) ── -->
+                <div style="background:var(--panel-dark); border:1px solid #440000;
+                            border-radius:8px; padding:10px; margin-bottom:10px;">
+                    <!-- FPS selector -->
+                    <div style="display:flex; gap:4px; margin-bottom:8px; align-items:center;">
+                        <span style="font-size:0.65rem; color:var(--text-muted);
+                                     white-space:nowrap; margin-right:4px;">REC FPS</span>
+                        <button id="fps24" onclick="setCineFps(24)" style="flex:1; padding:4px 0; font-size:0.72rem; font-weight:600;
+                                       background:var(--accent-teal); color:#000;
+                                       border:1px solid var(--accent-teal); border-radius:4px; cursor:pointer;">
+                            24p</button>
+                        <button id="fps25" onclick="setCineFps(25)" style="flex:1; padding:4px 0; font-size:0.72rem; font-weight:600;
+                                       background:none; color:#555;
+                                       border:1px solid #333; border-radius:4px; cursor:pointer;">
+                            25p</button>
+                        <button id="fps30" onclick="setCineFps(30)" style="flex:1; padding:4px 0; font-size:0.72rem; font-weight:600;
+                                       background:none; color:#555;
+                                       border:1px solid #333; border-radius:4px; cursor:pointer;">
+                            30p</button>
+                        <button id="fps60" onclick="setCineFps(60)" style="flex:1; padding:4px 0; font-size:0.72rem; font-weight:600;
+                                       background:none; color:#555;
+                                       border:1px solid #333; border-radius:4px; cursor:pointer;">
+                            60p</button>
+                    </div>
+                    <!-- Record / timecode row -->
+                    <div class="row" style="gap:8px; align-items:center;">
+                        <button id="recordBtn" onclick="toggleRecord()" style="flex:2; padding:12px; font-size:0.9rem; font-weight:700;
+                                       background:#1a0000; border:2px solid #cc2200; color:#ff4433;
+                                       border-radius:6px; cursor:pointer; letter-spacing:0.05em;">
+                            ● REC
+                        </button>
+                        <div id="timecodeDisplay" style="flex:3; font-family:monospace; font-size:1.1rem;
+                                    color:#ff4433; text-align:center; letter-spacing:0.1em;
+                                    background:#0a0000; border:1px solid #330000;
+                                    border-radius:4px; padding:8px 4px;">
+                            00:00:00:00
+                        </div>
+                        <div id="recIndicator" style="width:14px; height:14px; border-radius:50%;
+                                    background:#333; flex:0 0 14px;"></div>
+                    </div>
+                    <div style="font-size:0.65rem; color:var(--text-muted); margin-top:4px;
+                                text-align:center;">
+                        ★ Star button starts/stops recording · A button fires shutter / AUX trigger
+                    </div>
+                </div>
+
+                <!-- ── SOFT LIMITS ── -->
+                <div class="sub-group-title">Soft Limits
+                    <span id="cine_speed_badge" style="float:right; font-size:0.6rem; font-weight:400;
+                                 color:var(--accent-gold); padding:2px 6px;
+                                 border:1px solid var(--accent-gold); border-radius:10px;">
+                        CRAWL ONLY
+                    </span>
+                </div>
+                <div style="margin-bottom:8px;">
+                    <!-- Slider limits -->
+                    <div style="font-size:0.7rem; color:var(--text-dim); margin-bottom:4px;">
+                        SLIDER
+                        <span id="cine_slider_cal" style="float:right; color:var(--text-muted);">uncalibrated</span>
+                    </div>
+                    <div class="row" style="gap:4px; margin-bottom:6px;">
+                        <button class="mode-btn" onclick="calibrateLimit('slider','min')"
+                            style="flex:1; font-size:0.65rem;">← Set Min</button>
+                        <div id="cine_slider_bar" style="flex:3; height:20px; background:#1a1a1a;
+                             border:1px solid #333; border-radius:4px; position:relative; overflow:hidden;">
+                            <div id="cine_slider_pos" style="position:absolute; top:0; bottom:0;
+                                 width:3px; background:var(--accent-teal); left:50%; transform: translateX(-50%);"></div>
+                        </div>
+                        <button class="mode-btn" onclick="calibrateLimit('slider','max')"
+                            style="flex:1; font-size:0.65rem;">Set Max →</button>
+                    </div>
+                    <!-- Pan limits -->
+                    <div style="font-size:0.7rem; color:var(--text-dim); margin-bottom:4px;">
+                        PAN
+                        <span id="cine_pan_cal" style="float:right; color:var(--text-muted);">uncalibrated</span>
+                    </div>
+                    <div class="row" style="gap:4px; margin-bottom:6px;">
+                        <button class="mode-btn" onclick="calibrateLimit('pan','min')"
+                            style="flex:1; font-size:0.65rem;">← Set Min</button>
+                        <div id="cine_pan_bar" style="flex:3; height:20px; background:#1a1a1a;
+                             border:1px solid #333; border-radius:4px; position:relative; overflow:hidden;">
+                            <div id="cine_pan_pos" style="position:absolute; top:0; bottom:0;
+                                 width:3px; background:var(--accent-teal); left:50%; transform: translateX(-50%);"></div>
+                        </div>
+                        <button class="mode-btn" onclick="calibrateLimit('pan','max')"
+                            style="flex:1; font-size:0.65rem;">Set Max →</button>
+                    </div>
+                    <!-- Tilt limits -->
+                    <div style="font-size:0.7rem; color:var(--text-dim); margin-bottom:4px;">
+                        TILT
+                        <span id="cine_tilt_cal" style="float:right; color:var(--text-muted);">uncalibrated</span>
+                    </div>
+                    <div class="row" style="gap:4px; margin-bottom:4px;">
+                        <button class="mode-btn" onclick="calibrateLimit('tilt','min')"
+                            style="flex:1; font-size:0.65rem;">← Set Min</button>
+                        <div id="cine_tilt_bar" style="flex:3; height:20px; background:#1a1a1a;
+                             border:1px solid #333; border-radius:4px; position:relative; overflow:hidden;">
+                            <div id="cine_tilt_pos" style="position:absolute; top:0; bottom:0;
+                                 width:3px; background:var(--accent-teal); left:50%; transform: translateX(-50%);"></div>
+                        </div>
+                        <button class="mode-btn" onclick="calibrateLimit('tilt','max')"
+                            style="flex:1; font-size:0.65rem;">Set Max →</button>
+                    </div>
+                </div>
+
+                <!-- ── ARCTAN LOCK ── -->
+                <div class="sub-group-title">Arctan Subject Lock
+                    <span id="arctan_lock_badge" style="float:right; font-size:0.6rem; font-weight:400;
+                                 color:var(--text-muted); padding:2px 6px;
+                                 border:1px solid #333; border-radius:10px;">OFF</span>
+                </div>
+                <div style="font-size:0.72rem; color:var(--text-dim); margin-bottom:6px; line-height:1.5;">
+                    Jog to subject from 3+ positions, mark each. System locks pan+tilt to subject.
+                </div>
+                <div class="row" style="gap:6px; margin-bottom:6px;">
+                    <button class="mode-btn" onclick="arctanMarkPoint()" style="flex:2;">📍 Mark Point
+                        <span id="arctan_point_count" style="color:var(--accent-teal);">(0)</span>
+                    </button>
+                    <button class="mode-btn" onclick="arctanClear()" style="flex:1; font-size:0.68rem;">Clear</button>
+                </div>
+                <div id="arctan_status_row" style="font-size:0.68rem; margin-bottom:6px; display:none;">
+                    <div style="color:var(--accent-teal);">
+                        ✓ Solved — RMS error: <span id="arctan_residual">—</span>°
+                    </div>
+                    <div id="arctan_warning" style="color:var(--accent-gold); margin-top:2px;"></div>
+                </div>
+                <label class="toggle-label" style="margin-bottom:8px;">
+                    <input type="checkbox" id="arctan_enable_cb" onchange="arctanEnable(this.checked)" disabled>
+                    Enable subject lock (pan+tilt follow subject)
+                </label>
+
+                <!-- ── LIVE MODE ── -->
+                <div id="cine_live_panel">
+                    <div class="sub-group-title">Inertia / Feel</div>
+                    <div class="row" style="gap:4px; margin-bottom:8px;">
+                        <button class="mode-btn" onclick="setRigPreset('light')"
+                            style="flex:1; font-size:0.68rem;">Light</button>
+                        <button class="mode-btn active" id="presetStandard" onclick="setRigPreset('standard')"
+                            style="flex:1; font-size:0.68rem;">Standard</button>
+                        <button class="mode-btn" onclick="setRigPreset('heavy')"
+                            style="flex:1; font-size:0.68rem;">Heavy</button>
+                        <button class="mode-btn" id="presetTracking" onclick="setRigPreset('tracking')"
+                            style="flex:1; font-size:0.68rem;" title="Near-zero inertia + 15% motion scale on all axes — all axes at 15% speed for telephoto tracking">
+                            🎯 Track</button>
+                    </div>
+                    <div class="control-item">
+                        <label>Mass <span style="font-size:0.65rem; color:var(--text-muted);">
+                                — time to reach full speed</span></label>
+                        <div class="row" style="gap:8px; align-items:center;">
+                            <input type="range" id="cine_mass" min="0.05" max="2.0" step="0.05" value="0.40"
+                                oninput="updateInertiaLabel('mass'); sendInertia();" style="flex:3;">
+                            <span id="cine_mass_val" style="font-size:0.8rem; color:var(--accent-teal);
+                                  min-width:32px; text-align:right;">0.40s</span>
+                        </div>
+                    </div>
+                    <div class="control-item">
+                        <label>Drag <span style="font-size:0.65rem; color:var(--text-muted);">
+                                — viscosity of medium</span></label>
+                        <div class="row" style="gap:8px; align-items:center;">
+                            <input type="range" id="cine_drag" min="0.05" max="1.50" step="0.05" value="0.55"
+                                oninput="updateInertiaLabel('drag'); sendInertia();" style="flex:3;">
+                            <span id="cine_drag_val" style="font-size:0.8rem; color:var(--accent-teal);
+                                  min-width:32px; text-align:right;">0.55</span>
+                        </div>
+                    </div>
+
+                    <!-- Motion Scale — applies to ALL axes; essential for telephoto/crop -->
+                    <div class="control-item" style="margin-top:8px; padding-top:8px;
+                         border-top:1px solid #2a2a2a;">
+                        <label>Motion Scale
+                            <span style="font-size:0.65rem; color:var(--text-muted);">
+                                — global speed for all axes</span>
+                        </label>
+                        <div class="row" style="gap:8px; align-items:center;">
+                            <input type="range" id="cine_pt_scale" min="0" max="100" step="1" value="100"
+                                oninput="updatePtScaleLabel(); sendPtSensitivity();" style="flex:3;">
+                            <span id="cine_pt_scale_val" style="font-size:0.8rem; color:var(--accent-teal);
+                                  min-width:38px; text-align:right;">100%</span>
+                        </div>
+                        <div style="font-size:0.62rem; color:var(--text-muted); margin-top:2px;">
+                            🎯 Tracking = 15% · reduce further for extreme telephoto / crop sensors
+                        </div>
+                    </div>
+
+                </div>
+
+                <!-- ── PROGRAMMED MODE ── -->
+                <div id="cine_prog_panel" style="display:none;">
+
+                    <!-- Reminder: keyframes live in the shared Motion Path panel above -->
+                    <div style="font-size:0.68rem; color:var(--text-muted); padding:6px 8px;
+                         background:var(--panel-dark); border-radius:6px; margin-bottom:10px;
+                         font-family:monospace;">
+                        ↑ Edit keyframes &amp; load saved moves in the
+                        <strong style="color:var(--accent-teal);">Motion Path</strong>
+                        panel above — changes apply here immediately.
+                    </div>
+
+                    <!-- Playback settings -->
+                    <div class="sub-group-title">Playback</div>
+                    <div class="row">
+                        <div class="control-item half">
+                            <label>Pre-roll (s)</label>
+                            <input type="number" id="cine_preroll" value="3" step="0.5" min="0" onchange="sendCmd('cinematic_set_preroll',
+                                             {seconds: parseFloat(this.value)})">
+                        </div>
+                        <div class="control-item half">
+                            <label>Loop</label>
+                            <input type="checkbox" id="cine_loop" style="width:auto; margin-top:8px;"
+                                onchange="sendCmd('cinematic_set_loop', {enabled: this.checked})">
+                        </div>
+                    </div>
+
+                    <!-- Play controls -->
+                    <div class="button-grid" style="margin-top:6px; gap:6px;">
+                        <button class="mode-btn" onclick="cinematicPlay()" style="grid-column:span 2; padding:11px;">
+                            ▶ Play Move
+                        </button>
+                        <button id="cineRecordRunBtn" class="mode-btn" onclick="recordAndRun()"
+                            style="grid-column:span 2; padding:11px;
+                                   background:#1a3a1a; border-color:#2a7a2a; color:#7fda7f;"
+                            title="Start camera recording, hold pre-roll, then play move">
+                            ⏺ Record + Run
+                        </button>
+                        <button class="mode-btn" onclick="returnToStart()"
+                            style="grid-column:span 1; font-size:0.75rem;">
+                            ↩ Return to Start
+                        </button>
+                        <button id="cineStopBtn" class="mode-btn stop-style" onclick="sendCmd('cinematic_stop')"
+                            style="grid-column:span 1; font-size:0.75rem;">
+                            ■ Stop
+                        </button>
+                    </div>
+
+                    <!-- Progress bar -->
+                    <div id="cine_prog_bar_wrap" style="display:none; margin-top:8px; height:4px;
+                                background:#222; border-radius:2px;">
+                        <div id="cine_prog_bar" style="height:100%; width:0%;
+                             background:var(--accent-teal); border-radius:2px;
+                             transition:width 0.3s;"></div>
+                    </div>
+                    <div id="cine_prog_msg" style="font-size:0.68rem; color:var(--text-dim); margin-top:4px;
+                                font-family:monospace; display:none;"></div>
+
+                </div>
+
+            </section>
+
+            <!-- ══════════════════════════════════════════════════ -->
+            <!-- MACRO FOCUS RAIL / 3D SCAN                         -->
+            <!-- ══════════════════════════════════════════════════ -->
+            <section class="group-box" id="macro_panel" style="display:none;">
+                <h3 class="group-title">Macro / 3D Scan <span
+                        style="color:var(--accent-gold); font-size:0.65rem;">BETA</span></h3>
+
+                <!-- Sub-mode -->
+                <div class="row" style="margin-bottom:10px; gap:6px;">
+                    <button class="mode-btn active" id="macroModeScan" onclick="setMacroMode('scan')" style="flex:1;">🔬
+                        Scan</button>
+                    <button class="mode-btn" id="macroModeArt" onclick="setMacroMode('art')" style="flex:1;">🎬
+                        Art</button>
+                </div>
+
+                <!-- Project -->
+                <div class="sub-group-title">Project</div>
+                <div class="row">
+                    <div class="control-item half">
+                        <label>Project Name</label>
+                        <input type="text" id="macro_project_name" value="macro_project" oninput="macroCalc()">
+                    </div>
+                    <div class="control-item half">
+                        <label>Orbit Label</label>
+                        <input type="text" id="macro_orbit_label" value="orbit_001">
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div class="control-item half">
+                        <label>Pan Axis Mounting (°)</label>
+                        <input type="number" id="macro_rot_axis_angle" value="90" step="1" min="45" max="135"
+                            title="45-90°: tilted toward camera | 90°: vertical | 90-135°: tilted away from camera"
+                            oninput="macroCalc()">
+                    </div>
+                    <div class="control-item half">
+                        <label>Orientation</label>
+                        <input type="text" id="macro_rot_axis_desc" value="vertical"
+                            placeholder="e.g., 45° toward, 90° vertical, 135° away">
+                    </div>
+                </div>
+                <div style="font-size:0.65rem; color:var(--text-dim); margin-bottom:8px;">
+                    Pan axis angle: 45-90° (toward camera) • 90° (vertical) • 90-135° (away from camera)
+                </div>
+
+                <!-- Rotation Stage -->
+                <div class="sub-group-title">Rotation Stage (Pan Motor)</div>
+                <div class="row" style="gap:6px; margin-bottom:6px;">
+                    <button class="mode-btn active" id="macroRotFull" onclick="setRotationMode('full')"
+                        style="flex:1; font-size:0.68rem;">360° Full</button>
+                    <button class="mode-btn" id="macroRotRange" onclick="setRotationMode('range')"
+                        style="flex:1; font-size:0.68rem;">Range</button>
+                </div>
+                <div id="macro_rotation_range_controls" style="display:none;">
+                    <div class="row" style="gap:6px; margin-bottom:6px;">
+                        <button class="mode-btn macroMovementBtn" id="macroRotStartBtn" onclick="sendCmd('macro_set_rotation_start')"
+                            style="flex:1; font-size:0.68rem;">📍 Rot Start</button>
+                        <button class="mode-btn macroMovementBtn" id="macroRotEndBtn" onclick="sendCmd('macro_set_rotation_end')"
+                            style="flex:1; font-size:0.68rem;">📍 Rot End</button>
+                    </div>
+                    <div class="row" style="font-size:0.68rem; color:var(--text-dim); margin-bottom:6px; gap:12px;">
+                        <span>Start: <span id="macro_rot_start_disp" style="color:var(--accent-teal);">—</span>°</span>
+                        <span>End: <span id="macro_rot_end_disp" style="color:var(--accent-teal);">—</span>°</span>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="control-item half">
+                        <label>Num Stacks</label>
+                        <input type="number" id="macro_num_stacks" value="36" step="1" min="1" oninput="macroCalc()">
+                    </div>
+                    <div style="flex:1; display:flex; flex-direction:column; justify-content:flex-end; padding-bottom:6px;">
+                        <div style="font-size:0.68rem; color:var(--text-dim);">
+                            Recommended: <span id="macro_recommended_stacks" style="color:var(--accent-teal);">36</span>
+                        </div>
+                    </div>
+                </div>
+                <!-- Spacing Curve (Art mode only) -->
+                <div class="row" id="macro_easing_row" style="display:none;">
+                    <div class="control-item">
+                        <label>Spacing Curve (Art Mode)</label>
+                        <select id="macro_rotation_easing" onchange="macroCalc()">
+                            <option value="even">Even</option>
+                            <option value="ease_in_out">Ease In/Out</option>
+                            <option value="ease_in">Ease In</option>
+                            <option value="ease_out">Ease Out</option>
+                            <option value="gaussian">Gaussian</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Tilt Axis (Geodesic 2D Grid) -->
+                <div class="sub-group-title">Tilt Axis (Geodesic 2D Grid)</div>
+                <div class="row" style="gap:6px; margin-bottom:6px;">
+                    <button class="mode-btn active" id="macroTiltFull" onclick="setTiltMode('full')"
+                        style="flex:1; font-size:0.68rem;">360° Full</button>
+                    <button class="mode-btn" id="macroTiltLimited" onclick="setTiltMode('limited')"
+                        style="flex:1; font-size:0.68rem;">Limited</button>
+                </div>
+                <div id="macro_tilt_range_controls" style="display:none;">
+                    <div class="row" style="gap:6px; margin-bottom:6px;">
+                        <button class="mode-btn macroMovementBtn" id="macroTiltStartBtn" onclick="sendCmd('macro_set_tilt_start')"
+                            style="flex:1; font-size:0.68rem;">📍 Tilt Start</button>
+                        <button class="mode-btn macroMovementBtn" id="macroTiltEndBtn" onclick="sendCmd('macro_set_tilt_end')"
+                            style="flex:1; font-size:0.68rem;">📍 Tilt End</button>
+                    </div>
+                    <div class="row" style="font-size:0.68rem; color:var(--text-dim); margin-bottom:6px; gap:12px;">
+                        <span>Start: <span id="macro_tilt_start_disp" style="color:var(--accent-teal);">—</span>°</span>
+                        <span>End: <span id="macro_tilt_end_disp" style="color:var(--accent-teal);">—</span>°</span>
+                    </div>
+                </div>
+                <div id="macro_tilt_limits" style="display:none;">
+                    <div class="row" style="gap:6px;">
+                        <div class="control-item half" style="margin:0;">
+                            <label>Tilt Soft Min (°)</label>
+                            <input type="number" id="macro_tilt_soft_min" value="-90" onchange="sendMacroSoftLimits()">
+                        </div>
+                        <div class="control-item half" style="margin:0;">
+                            <label>Tilt Soft Max (°)</label>
+                            <input type="number" id="macro_tilt_soft_max" value="90" onchange="sendMacroSoftLimits()">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Focus Rail -->
+                <div class="sub-group-title">Focus Rail (Depth Stack)</div>
+                <div class="row" style="gap:6px; margin-bottom:3px;">
+                    <button class="mode-btn macroMovementBtn" id="macroRailStartBtn" onclick="sendCmd('macro_set_rail_start')"
+                        style="flex:1; font-size:0.68rem;">📍 Set Start</button>
+                    <button class="mode-btn macroMovementBtn" id="macroRailEndBtn" onclick="sendCmd('macro_set_rail_end')"
+                        style="flex:1; font-size:0.68rem;">📍 Set End</button>
+                </div>
+                <div class="row" style="font-size:0.68rem; color:var(--text-dim); margin-bottom:6px; gap:12px;">
+                    <span>Start: <span id="macro_rail_start_disp" style="color:var(--accent-teal);">—</span> mm</span>
+                    <span>End: <span id="macro_rail_end_disp" style="color:var(--accent-teal);">—</span> mm</span>
+                    <span>Travel: <span id="macro_rail_travel_disp" style="color:var(--accent-gold);">—</span> mm</span>
+                </div>
+                <div class="row">
+                    <div class="control-item half">
+                        <label>Images per Stack</label>
+                        <input type="number" id="macro_images_per_stack" value="9" step="1" min="1" oninput="macroCalc()">
+                    </div>
+                    <div class="control-item half">
+                        <label>Total Travel (mm)</label>
+                        <input type="number" id="macro_travel_total_mm" value="—" style="color:var(--accent-gold);"
+                            readonly>
+                    </div>
+                </div>
+                <!-- (Macro Rail Limits Unified in Sidebar) -->
+
+                <!-- Stereo 3D Capture (Art mode only) -->
+                <div id="macro_stereo_section" style="display:none;">
+                    <div class="sub-group-title">Stereo 3D Capture (VR/3D Video)</div>
+                    <div class="row" style="gap:6px; margin-bottom:6px; align-items:center;">
+                        <label class="toggle-label" style="flex:0 0 auto;">
+                            <input type="checkbox" id="macro_stereo_enabled" onchange="macroCalc()"> Enable Stereo
+                        </label>
+                        <div class="control-item" style="flex:1; margin:0;">
+                            <label>Pan Offset (°)</label>
+                            <input type="number" id="macro_stereo_offset_deg" value="3.0" step="0.1" min="0.1" max="30"
+                                title="Degrees of pan offset between left and right eye viewpoints"
+                                onchange="macroCalc()">
+                        </div>
+                    </div>
+                    <div style="font-size:0.65rem; color:var(--text-dim); margin-bottom:8px;">
+                        When enabled, each stack position will be captured twice (left/right eye) for stereo 3D reconstruction.
+                    </div>
+                </div>
+
+                <!-- Exposure Slots -->
+                <div class="sub-group-title">Exposure Slots</div>
+
+                <div class="group-box" style="margin-bottom:8px; padding:10px 8px 8px 8px;">
+                    <h3 class="group-title" style="font-size:0.62rem; color:var(--accent-green);">Slot A</h3>
+                    <div class="row" style="gap:6px; margin-bottom:4px; align-items:center;">
+                        <label class="toggle-label" style="flex:0 0 auto;">
+                            <input type="checkbox" id="macro_slot_a_enabled" checked onchange="macroCalc()"> Enable
+                        </label>
+                        <div class="control-item" style="flex:1; margin:0;">
+                            <label>Label</label>
+                            <input type="text" id="macro_slot_a_label" value="diffuse" style="padding:3px 6px;">
+                        </div>
+                    </div>
+                    <div class="row" style="gap:6px; margin-bottom:4px; align-items:center;">
+                        <label class="toggle-label"><input type="checkbox" id="macro_slot_a_relay1"> R1</label>
+                        <label class="toggle-label"><input type="checkbox" id="macro_slot_a_relay2"> R2</label>
+                        <div class="control-item" style="flex:1; margin:0;">
+                            <label>Settle (ms)</label>
+                            <input type="number" id="macro_slot_a_settle" value="0" step="50" min="0"
+                                style="padding:3px 6px;">
+                        </div>
+                        <div class="control-item" style="flex:1; margin:0;">
+                            <label>Release (ms)</label>
+                            <input type="number" id="macro_slot_a_release" value="0" step="50" min="0"
+                                style="padding:3px 6px;">
+                        </div>
+                    </div>
+                    <div class="row" style="gap:4px;">
+                        <div class="control-item" style="flex:1; margin:0;"><label>ISO</label>
+                            <input type="number" id="macro_slot_a_iso" value="400" step="100" style="padding:3px 4px;">
+                        </div>
+                        <div class="control-item" style="flex:1; margin:0;"><label>Shutter (s)</label>
+                            <input type="number" id="macro_slot_a_shutter" value="0.008" step="0.001"
+                                style="padding:3px 4px;">
+                        </div>
+                        <div class="control-item" style="flex:1; margin:0;"><label>Kelvin</label>
+                            <input type="number" id="macro_slot_a_kelvin" value="5500" step="100"
+                                style="padding:3px 4px;">
+                        </div>
+                        <div class="control-item" style="flex:0 0 36px; margin:0;"><label>AE</label>
+                            <input type="checkbox" id="macro_slot_a_ae" style="width:auto; margin-top:6px;">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="group-box" style="margin-bottom:8px; padding:10px 8px 8px 8px;">
+                    <h3 class="group-title" style="font-size:0.62rem; color:var(--accent-gold);">Slot B</h3>
+                    <div class="row" style="gap:6px; margin-bottom:4px; align-items:center;">
+                        <label class="toggle-label" style="flex:0 0 auto;">
+                            <input type="checkbox" id="macro_slot_b_enabled" onchange="macroCalc()"> Enable
+                        </label>
+                        <div class="control-item" style="flex:1; margin:0;">
+                            <label>Label</label>
+                            <input type="text" id="macro_slot_b_label" value="laser" style="padding:3px 6px;">
+                        </div>
+                    </div>
+                    <div class="row" style="gap:6px; margin-bottom:4px; align-items:center;">
+                        <label class="toggle-label"><input type="checkbox" id="macro_slot_b_relay1"> R1</label>
+                        <label class="toggle-label"><input type="checkbox" id="macro_slot_b_relay2" checked> R2</label>
+                        <div class="control-item" style="flex:1; margin:0;">
+                            <label>Settle (ms)</label>
+                            <input type="number" id="macro_slot_b_settle" value="250" step="50" min="0"
+                                style="padding:3px 6px;">
+                        </div>
+                        <div class="control-item" style="flex:1; margin:0;">
+                            <label>Release (ms)</label>
+                            <input type="number" id="macro_slot_b_release" value="0" step="50" min="0"
+                                style="padding:3px 6px;">
+                        </div>
+                    </div>
+                    <div class="row" style="gap:4px;">
+                        <div class="control-item" style="flex:1; margin:0;"><label>ISO</label>
+                            <input type="number" id="macro_slot_b_iso" value="200" step="100" style="padding:3px 4px;">
+                        </div>
+                        <div class="control-item" style="flex:1; margin:0;"><label>Shutter (s)</label>
+                            <input type="number" id="macro_slot_b_shutter" value="0.033" step="0.001"
+                                style="padding:3px 4px;">
+                        </div>
+                        <div class="control-item" style="flex:1; margin:0;"><label>Kelvin</label>
+                            <input type="number" id="macro_slot_b_kelvin" value="5500" step="100"
+                                style="padding:3px 4px;">
+                        </div>
+                        <div class="control-item" style="flex:0 0 36px; margin:0;"><label>AE</label>
+                            <input type="checkbox" id="macro_slot_b_ae" style="width:auto; margin-top:6px;">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Timing -->
+                <div class="sub-group-title">Timing</div>
+                <div class="row">
+                    <div class="control-item half">
+                        <label>Vibe Delay (s)</label>
+                        <input type="number" id="macro_vibe_delay" value="0.5" step="0.1" min="0">
+                    </div>
+                    <div class="control-item half">
+                        <label>Exp Margin (s)</label>
+                        <input type="number" id="macro_exp_margin" value="0.2" step="0.1" min="0">
+                    </div>
+                </div>
+
+                <!-- Lens Profile -->
+                <div class="sub-group-title">Lens Profile
+                    <span style="color:var(--text-muted); font-size:0.6rem; font-weight:400;"> metadata</span>
+                </div>
+                <div class="row">
+                    <div class="control-item half">
+                        <label>Lens Name</label>
+                        <input type="text" id="macro_lens_name" value="unknown">
+                    </div>
+                    <div class="control-item half">
+                        <label>Type</label>
+                        <select id="macro_lens_type">
+                            <option value="macro">Macro</option>
+                            <option value="telecentric">Telecentric</option>
+                            <option value="other">Other</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="control-item half">
+                        <label>Magnification (×)</label>
+                        <input type="number" id="macro_lens_mag" value="1.0" step="0.1" min="0">
+                    </div>
+                    <div class="control-item half">
+                        <label>Working Dist. (mm)</label>
+                        <input type="number" id="macro_lens_wd" value="0" step="1" min="0">
+                    </div>
+                </div>
+                <div class="row" style="gap:6px; margin-bottom:10px;">
+                    <button class="mode-btn" onclick="macroStoreLensProfile()" style="flex:1; font-size:0.68rem;">💾
+                        Save Profile</button>
+                    <select id="macro_lens_profile_select" style="flex:2; font-size:0.78rem;"
+                        onchange="macroLoadLensProfile(this.value)">
+                        <option value="">— Load saved —</option>
+                    </select>
+                </div>
+
+                <!-- Summary -->
+                <div class="sub-group-title">Sequence Summary</div>
+                <div style="background:var(--panel-dark); border:var(--border); border-radius:6px;
+                            padding:8px 10px; font-family:monospace; font-size:0.75rem;
+                            line-height:1.9; color:var(--text-dim); margin-bottom:10px;">
+                    <div>Frames/stack: <span id="macro_sum_frames" style="color:var(--accent-teal);">—</span></div>
+                    <div>Stacks: <span id="macro_sum_stacks" style="color:var(--accent-teal);">—</span></div>
+                    <div>Total images: <span id="macro_sum_images" style="color:var(--accent-gold);">—</span></div>
+                    <div>Est. storage: <span id="macro_sum_storage" style="color:var(--accent-gold);">—</span> GB</div>
+                </div>
+
+                <!-- Start / Abort -->
+                <div class="button-grid" style="gap:8px;">
+                    <button class="mode-btn" id="macroStartBtn" onclick="macroStart()"
+                        style="grid-column:span 2; padding:11px;">▶ Start Sequence</button>
+                </div>
+
+                <!-- Progress panel (shown during run) -->
+                <div id="macro_progress_panel" style="display:none; margin-top:10px;
+                     background:var(--panel-dark); border:var(--border); border-radius:6px; padding:8px 10px;">
+                    <div style="font-size:0.7rem; color:var(--text-dim); font-family:monospace; line-height:1.8;">
+                        <div>Stack: <span id="macro_prog_stack" style="color:var(--accent-teal);">—</span> /
+                            <span id="macro_prog_total_stacks">—</span>
+                        </div>
+                        <div>Frame: <span id="macro_prog_frame" style="color:var(--accent-teal);">—</span> /
+                            <span id="macro_prog_total_frames">—</span>
+                        </div>
+                        <div>Rotation: <span id="macro_prog_rot" style="color:var(--accent-gold);">—</span>°</div>
+                        <div>Rail: <span id="macro_prog_rail" style="color:var(--accent-gold);">—</span> mm</div>
+                        <div id="macro_prog_msg" style="color:var(--text-dim); white-space:nowrap;
+                             overflow:hidden; text-overflow:ellipsis;"></div>
+                    </div>
+                    <div style="margin-top:6px; height:4px; background:#333; border-radius:2px;">
+                        <div id="macro_prog_bar" style="height:100%; width:0%;
+                             background:var(--accent-teal); border-radius:2px; transition:width 0.3s;"></div>
+                    </div>
+                </div>
+            </section>
+
+        </aside>
+
+        <!-- ══════════════════════════════════════════════════════ -->
+        <!-- THE STAGE                                               -->
+        <!-- ══════════════════════════════════════════════════════ -->
+        <div id="stage">
+
+            <!-- Live Feed + Loupe Overlay -->
+            <section class="group-box visualizer-box">
+                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+                    <h3 class="group-title" id="feedLabel" style="margin:0; flex:1;">Optical Feed — Framing (640×360) +
+                        Focus Loupe</h3>
+
+                    <!-- Camera orientation -->
+                    <div style="display:flex; gap:3px; margin-right:6px;">
+                        <button id="orientLand" onclick="setCameraOrientation('landscape')" title="Landscape (normal)"
+                            style="background:var(--accent-teal); border:1px solid var(--accent-teal);
+                                       color:#000; border-radius:4px; padding:4px 7px;
+                                       cursor:pointer; font-size:0.8rem; line-height:1;">⬜</button>
+                        <button id="orientCW" onclick="setCameraOrientation('portrait_cw')"
+                            title="Portrait — rotated 90° clockwise" style="background:none; border:1px solid #444;
+                                       color:#666; border-radius:4px; padding:4px 7px;
+                                       cursor:pointer; font-size:0.8rem; line-height:1;">↻</button>
+                        <button id="orientCCW" onclick="setCameraOrientation('portrait_ccw')"
+                            title="Portrait — rotated 90° counter-clockwise" style="background:none; border:1px solid #444;
+                                       color:#666; border-radius:4px; padding:4px 7px;
+                                       cursor:pointer; font-size:0.8rem; line-height:1;">↺</button>
+                        <button id="orientFlip" onclick="setCameraOrientation('inverted')" title="Inverted — 180°"
+                            style="background:none; border:1px solid #444;
+                                       color:#666; border-radius:4px; padding:4px 7px;
+                                       cursor:pointer; font-size:0.8rem; line-height:1;">⬛</button>
+                    </div>
+
+                    <button id="loupeToggleBtn" onclick="toggleLoupeVisibility()" title="Show/hide focus loupe" style="background:none; border:1px solid var(--accent-teal);
+                                   color:var(--accent-teal); border-radius:6px;
+                                   padding:4px 10px; cursor:pointer; font-size:0.85rem;
+                                   flex-shrink:0;">
+                        🔍
+                    </button>
+                    <button id="previewToggleBtn" onclick="togglePreviewCamera()" style="display:none; font-size:0.7rem; padding:3px 10px;
+                                   background:var(--panel-light); border:var(--border);
+                                   border-radius:6px; color:var(--accent-teal); cursor:pointer;
+                                   white-space:nowrap;">
+                        📷 PiCam
+                    </button>
+                </div>
+                <div class="canvas-container" id="feedContainer">
+                    <!-- Main low-res framing stream (shown when idle) -->
+                    <img id="mjpegFeed" src="/video_feed" alt="live feed" style="position:absolute; top:0; left:0; width:100%; height:100%;
+                                object-fit:contain; z-index:1;">
+
+                    <!-- Latest captured frame (shown during run) -->
+                    <img id="latestFrame" src="/latest_frame" alt="last shot" style="position:absolute; top:0; left:0; width:100%; height:100%;
+                                object-fit:contain; display:none; z-index:1;">
+
+                    <!-- Canvas overlay: loupe magnifier + motion ROI box — always on top -->
+                    <canvas id="overlayCanvas" style="position:absolute; top:0; left:0; width:100%; height:100%;
+                                   pointer-events:none; z-index:10;">
+                    </canvas>
+
+                    <!-- Crosshair reticle -->
+                    <div id="feedReticle"></div>
+                </div>
+                <div id="statusLine">STATUS: IDLE</div>
+            </section>
+
+            <!-- Interaction Row -->
+            <div id="interactionArea">
+
+                <!-- Joystick -->
+                <section class="group-box joystick-box">
+                    <h3 class="group-title">Manual Vector (UART)
+                        <span id="gamepadIndicator"
+                              style="float:right; font-size:0.65rem; font-weight:400;
+                                     color:var(--text-muted); margin-top:2px;">
+                            🎮 No controller
+                        </span>
+                    </h3>
+                    <div class="motion-content">
+                        <div class="dial-wrap">
+                            <!-- Nudge pad: hold ▲▼◄► to jog pan/tilt; releases stop instantly -->
+                            <div class="nudge-pad-wrap">
+                                <!-- Tilt UP -->
+                                <button class="jog-btn" id="jogTiltUp"
+                                        title="Hold: Tilt Up (nudge)"
+                                        onpointerdown="startUiNudge('tilt', 1, this)"
+                                        onpointerup="stopUiNudge('tilt', this)"
+                                        onpointercancel="stopUiNudge('tilt', this)">▲</button>
+
+                                <div class="nudge-mid-row">
+                                    <!-- Pan LEFT -->
+                                    <button class="jog-btn" id="jogPanLeft"
+                                            title="Hold: Pan Left (nudge)"
+                                            onpointerdown="startUiNudge('pan', -1, this)"
+                                            onpointerup="stopUiNudge('pan', this)"
+                                            onpointercancel="stopUiNudge('pan', this)">◄</button>
+
+                                    <!-- Joystick pad (pan+tilt smooth, via InertiaEngine) -->
+                                    <div class="dial-container">
+                                        <div class="dial-inner" id="joystickPad">
+                                            <div id="joystickKnob" class="dial-knob"></div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Pan RIGHT -->
+                                    <button class="jog-btn" id="jogPanRight"
+                                            title="Hold: Pan Right (nudge)"
+                                            onpointerdown="startUiNudge('pan', 1, this)"
+                                            onpointerup="stopUiNudge('pan', this)"
+                                            onpointercancel="stopUiNudge('pan', this)">►</button>
+                                </div>
+
+                                <!-- Tilt DOWN -->
+                                <button class="jog-btn" id="jogTiltDown"
+                                        title="Hold: Tilt Down (nudge)"
+                                        onpointerdown="startUiNudge('tilt', -1, this)"
+                                        onpointerup="stopUiNudge('tilt', this)"
+                                        onpointercancel="stopUiNudge('tilt', this)">▼</button>
+                            </div><!-- /nudge-pad-wrap -->
+
+                            <!-- Slider axis: ◄ [strip] ► nudge buttons at each end -->
+                            <div class="slider-strip-wrap">
+                                <div class="slider-strip-label">SLIDER (hold ends to nudge)</div>
+                                <div class="slider-nudge-row">
+                                    <button class="jog-btn" id="jogSliderLeft"
+                                            title="Hold: Slide Left (nudge)"
+                                            onpointerdown="startUiNudge('slider', -1, this)"
+                                            onpointerup="stopUiNudge('slider', this)"
+                                            onpointercancel="stopUiNudge('slider', this)">◄</button>
+                                    <div class="slider-strip-track" id="sliderStrip">
+                                        <div id="sliderStripKnob" class="slider-strip-knob"></div>
+                                    </div>
+                                    <button class="jog-btn" id="jogSliderRight"
+                                            title="Hold: Slide Right (nudge)"
+                                            onpointerdown="startUiNudge('slider', 1, this)"
+                                            onpointerup="stopUiNudge('slider', this)"
+                                            onpointercancel="stopUiNudge('slider', this)">►</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="readouts">
+                            <div class="readout-card">SLIDER: <span id="val_s">0.0</span> mm</div>
+                            <div class="readout-card">PAN: <span id="val_p">0.0</span> °</div>
+                            <div class="readout-card">TILT: <span id="val_t">0.0</span> °</div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Progress + HG Telemetry -->
+                <section class="group-box progress-box">
+                    <h3 class="group-title">Sequence Progress</h3>
+                    <div class="progress-display">
+                        <div class="big-frame-num">
+                            <span id="cur_f">000</span> / <span id="tot_f">300</span>
+                        </div>
+                        <div class="time-est" id="progress_msg">Idle</div>
+
+                        <!-- Disk space indicator (always visible) -->
+                        <div id="disk_space_row" class="readout-card"
+                            style="font-size:0.72rem; text-align:left; margin-top:6px; width:100%;">
+                            💾 <span id="disk_free_label">Checking…</span>
+                        </div>
+                        <!-- Pre-flight warning: shown when sequence won't fit -->
+                        <div id="disk_preflight_warn" style="display:none; margin-top:4px; width:100%; font-size:0.7rem;
+                                    color:var(--accent-gold); font-family:monospace; text-align:left;
+                                    padding:4px 8px; background:rgba(255,210,80,0.08);
+                                    border:1px solid rgba(255,210,80,0.3); border-radius:6px;">
+                        </div>
+
+                        <!-- Estimated end / frames (visible when running) -->
+                        <div id="progress_estimates" style="width:100%; margin-top:6px; display:none;">
+                            <div class="readout-card" style="font-size:0.75rem; text-align:left; margin-bottom:4px;">
+                                Est. finish: <span id="est_end">—</span>
+                                &nbsp;|&nbsp; Remaining: <span id="est_remaining">—</span>
+                            </div>
+                            <div class="readout-card" style="font-size:0.75rem; text-align:left;">
+                                Current interval: <span id="cur_interval">—</span>s
+                                <span id="hg_interval_note" style="color:var(--accent-gold); display:none;">
+                                    &nbsp;(HG adaptive)
+                                </span>
+                            </div>
+                        </div>
+
+                        <div style="margin-top:10px; width:100%;">
+                            <div class="readout-card" style="font-size:0.8rem; text-align:left; margin-bottom:6px;">
+                                Phase: <span id="hg_phase">—</span> &nbsp;|&nbsp;
+                                Sun: <span id="hg_sun_alt">—</span>° &nbsp;|&nbsp;
+                                EV: <span id="hg_ev">—</span>
+                            </div>
+                            <div class="readout-card" style="font-size:0.8rem; text-align:left;">
+                                ISO: <span id="hg_iso">—</span> &nbsp;|&nbsp;
+                                Shutter: <span id="hg_shutter">—</span> &nbsp;|&nbsp;
+                                WB: <span id="hg_kelvin">—</span>K
+                            </div>
+                        </div>
+
+                        <!-- Session Graph button -->
+                        <button id="graphBtn" onclick="openSessionGraph()"
+                            style="width:100%; margin-top:10px; padding:7px;
+                                   background:none; border:1px solid var(--accent-teal);
+                                   color:var(--accent-teal); font-family:monospace;
+                                   font-size:0.75rem; letter-spacing:0.08em; cursor:pointer;
+                                   text-transform:uppercase; transition:background 0.2s, color 0.2s;"
+                            onmouseover="this.style.background='rgba(0,204,170,0.12)'"
+                            onmouseout="this.style.background='none'">
+                            📈 SESSION GRAPH
+                        </button>
+                    </div>
+                </section>
+
+            </div>
+        </div>
+    </main>
+
+    <!-- Log drawer — slides up from above footer when footer is clicked -->
+    <div id="logDrawer">
+        <div id="logDrawerHeader">
+            <span id="logDrawerTitle">APP LOG</span>
+            <div>
+                <button id="logCopyBtn" onclick="copyAllLogs(event)">Copy All</button>
+                <button id="logClearBtn" onclick="clearLog(event)">Clear</button>
+            </div>
+        </div>
+        <div id="logLinesContainer"></div>
+    </div>
+
+    <footer id="footer" onclick="toggleLogDrawer()" title="Click to expand log">
+        <div id="debugOverlay">LOG: Initialising…</div>
+        <div id="logDrawerToggle">▲ LOG (0)</div>
+    </footer>
+
+    <script src="/static/main.js"></script>
+
+    <!-- ── FOLDER BROWSER MODAL ── -->
+    <div id="folderModal" class="modal-overlay" style="display:none;" onclick="closeFolderBrowser(event)">
+        <div class="modal-box" onclick="event.stopPropagation()" style="width:min(600px,95vw); max-height:80vh;">
+
+            <!-- Header: breadcrumb path + close -->
+            <div class="modal-header" style="gap:10px; flex-wrap:wrap;">
+                <div style="display:flex; align-items:center; gap:6px; flex:1; min-width:0;">
+                    <span style="color:var(--text-dim); font-size:0.75rem; white-space:nowrap;">📂</span>
+                    <span id="folderModalPath" style="font-family:monospace; font-size:0.78rem; color:var(--accent-teal);
+                                 overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></span>
+                </div>
+                <button onclick="closeFolderBrowser()" style="padding:4px 10px; flex-shrink:0;">✕</button>
+            </div>
+
+            <!-- Drives quick-jump bar -->
+            <div id="drivesBar" style="padding:6px 12px; border-bottom:var(--border); display:flex;
+                        gap:6px; flex-wrap:wrap; background:var(--panel-dark);">
+                <span style="font-size:0.7rem; color:var(--text-dim); align-self:center;">Jump:</span>
+                <button class="drive-chip" id="chip_home" onclick="browseTo('/home/tim')">🏠 Home</button>
+                <button class="drive-chip" id="chip_pics" onclick="browseTo('/home/tim/Pictures')">🖼 Pictures</button>
+                <button class="drive-chip" id="chip_media" onclick="browseTo('/media/tim')">💾 Media</button>
+                <button class="drive-chip" id="chip_mnt" onclick="browseTo('/mnt')">🗄 Mounts</button>
+                <button class="drive-chip" onclick="scanDrives()">⟳</button>
+            </div>
+
+            <!-- Body: folder list -->
+            <div id="folderList" class="folder-list" style="min-height:220px;"></div>
+
+            <!-- Disk usage bar -->
+            <div id="folderDiskBar" style="padding:5px 14px; border-top:var(--border); font-size:0.7rem;
+                        color:var(--text-dim); font-family:monospace; background:var(--panel-dark);">
+                💾 <span id="folderDiskInfo">—</span>
+            </div>
+
+            <!-- Footer: selected path + create folder + confirm -->
+            <div class="modal-footer" style="flex-wrap:wrap; gap:8px;">
+                <span id="folderSelectedPath" style="font-size:0.72rem; color:var(--accent-teal); flex:1;
+                             font-family:monospace; min-width:0; overflow:hidden;
+                             text-overflow:ellipsis; white-space:nowrap;"></span>
+                <div style="display:flex; gap:6px; flex-shrink:0;">
+                    <button class="mode-btn" style="font-size:0.75rem; padding:5px 10px;"
+                        onclick="createFolderPrompt()">+ New Folder</button>
+                    <button class="mode-btn" onclick="confirmFolderSelection()">Select</button>
+                </div>
+            </div>
+
+            <!-- Inline create-folder row (hidden by default) -->
+            <div id="newFolderRow" style="display:none; padding:8px 14px; border-top:var(--border);
+                        background:var(--panel-dark); gap:8px; flex-wrap:wrap;" class="row">
+                <input type="text" id="newFolderName" placeholder="New folder name" style="flex:1; min-width:120px;"
+                    onkeydown="if(event.key==='Enter')confirmCreateFolder(); if(event.key==='Escape')cancelCreateFolder();">
+                <button class="mode-btn" style="padding:5px 12px;" onclick="confirmCreateFolder()">Create</button>
+                <button style="padding:5px 10px; background:none; border:var(--border);
+                               border-radius:6px; color:var(--text-dim); cursor:pointer;"
+                    onclick="cancelCreateFolder()">Cancel</button>
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>

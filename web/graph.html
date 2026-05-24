@@ -1,0 +1,1611 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PiSlider — Session Graph</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Rajdhani:wght@300;400;600;700&display=swap');
+
+    :root {
+      --bg: #0a0c0e;
+      --bg2: #0f1215;
+      --bg3: #141820;
+      --border: #1e2530;
+      --border-bright: #2a3545;
+      --green: #00ff88;
+      --green-dim: #00994d;
+      --cyan: #00d4ff;
+      --cyan-dim: #007a99;
+      --gold: #ffaa00;
+      --gold-dim: #996600;
+      --red: #ff3344;
+      --purple: #aa66ff;
+      --teal: #00ccaa;
+      --text: #ccd6e0;
+      --text-dim: #5a6a7a;
+      --text-muted: #2e3a46;
+
+      /* phase colours */
+      --phase-day: rgba(255, 170, 0, 0.07);
+      --phase-golden: rgba(255, 100, 20, 0.10);
+      --phase-twilight: rgba(100, 60, 200, 0.10);
+      --phase-night: rgba(20, 30, 80, 0.20);
+    }
+
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html,
+    body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      overflow: hidden;
+    }
+
+    /* ── Layout ── */
+    #shell {
+      display: grid;
+      grid-template-rows: 48px 1fr 300px 32px;
+      height: 100vh;
+    }
+
+    /* ── Header ── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 18px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg2);
+    }
+
+    .hdr-left {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .hdr-title {
+      font-family: 'Rajdhani', sans-serif;
+      font-size: 1.1rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--green);
+    }
+
+    .hdr-sub {
+      font-size: 0.68rem;
+      color: var(--text-dim);
+      letter-spacing: 0.05em;
+    }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--red);
+      box-shadow: 0 0 6px var(--red);
+      transition: background 0.3s, box-shadow 0.3s;
+    }
+
+    .dot.live {
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+
+      0%,
+      100% {
+        opacity: 1
+      }
+
+      50% {
+        opacity: 0.5
+      }
+    }
+
+    .hdr-stats {
+      display: flex;
+      gap: 20px;
+      align-items: center;
+    }
+
+    .stat {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+    }
+
+    .stat-val {
+      font-size: 0.95rem;
+      font-weight: 500;
+      color: var(--cyan);
+    }
+
+    .stat-lbl {
+      font-size: 0.58rem;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .btn-back {
+      background: none;
+      border: 1px solid var(--border-bright);
+      color: var(--text-dim);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      padding: 4px 10px;
+      cursor: pointer;
+      letter-spacing: 0.05em;
+      transition: border-color 0.2s, color 0.2s;
+    }
+
+    .btn-back:hover {
+      border-color: var(--cyan);
+      color: var(--cyan);
+    }
+
+    /* ── Chart area ── */
+    #charts {
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 10px 0 4px;
+      /* no horizontal padding — canvases go edge-to-edge */
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    /* ── Individual chart row ── */
+    .chart-row {
+      display: flex;
+      align-items: stretch;
+      height: 90px;
+      flex-shrink: 0;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg);
+      overflow: hidden;
+    }
+
+    .chart-row.tall {
+      height: 120px;
+    }
+
+    .chart-row.thin {
+      height: 50px;
+    }
+
+    .chart-label {
+      width: 110px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 0 12px 0 18px;
+      border-right: 2px solid var(--border);
+      background: var(--bg2);
+      overflow: hidden;
+    }
+
+    .chart-label .lbl-name {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-bottom: 2px;
+      opacity: 0.8;
+    }
+
+    .chart-label .lbl-cur {
+      font-size: 16px;
+      font-weight: 600;
+      color: #ffffff;
+      font-variant-numeric: tabular-nums;
+      text-shadow: 0 0 10px rgba(255, 255, 255, 0.1);
+    }
+
+    .chart-label .lbl-unit {
+      font-size: 8px;
+      color: var(--text-dim);
+      margin-top: 2px;
+      text-transform: lowercase;
+      letter-spacing: 0.05em;
+    }
+
+    canvas {
+      flex: 1;
+      min-width: 0;
+      height: 100% !important;
+      display: block;
+    }
+
+    /* ── Phase legend ── */
+    #legend {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      padding: 0 18px 0 110px;
+      height: 32px;
+      border-top: 1px solid var(--border);
+      background: var(--bg2);
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 0.62rem;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+    }
+
+    .legend-swatch {
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+    }
+
+    /* scrollbar */
+    #charts::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    #charts::-webkit-scrollbar-track {
+      background: var(--bg);
+    }
+
+    #charts::-webkit-scrollbar-thumb {
+      background: var(--border-bright);
+      border-radius: 2px;
+    }
+
+    /* empty state */
+    #empty {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      color: var(--text-dim);
+      pointer-events: none;
+    }
+
+    #empty .big {
+      font-family: 'Rajdhani', sans-serif;
+      font-size: 2rem;
+      font-weight: 300;
+      color: var(--text-muted);
+    }
+
+    #empty .sm {
+      font-size: 0.72rem;
+      margin-top: 6px;
+      letter-spacing: 0.05em;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div id="shell">
+    <header>
+      <div class="hdr-left">
+        <div class="dot" id="liveDot"></div>
+        <div>
+          <div class="hdr-title">PiSlider — Session Graph</div>
+          <div class="hdr-sub" id="hdrSub">Connecting…</div>
+        </div>
+      </div>
+      <div class="hdr-stats">
+        <div class="stat"><span class="stat-val" id="statFrame">—</span><span class="stat-lbl">Frame</span></div>
+        <div class="stat"><span class="stat-val" id="statPhase">—</span><span class="stat-lbl">Phase</span></div>
+        <div class="stat"><span class="stat-val" id="statEV">—</span><span class="stat-lbl">EV</span></div>
+        <div class="stat"><span class="stat-val" id="statShutter">—</span><span class="stat-lbl">Shutter</span></div>
+        <div class="stat"><span class="stat-val" id="statISO">—</span><span class="stat-lbl">ISO</span></div>
+        <div class="stat"><span class="stat-val" id="statInterval">—</span><span class="stat-lbl">Interval</span></div>
+      </div>
+      <button class="btn-back" onclick="window.close()">✕ CLOSE</button>
+    </header>
+
+    <div id="charts" style="position:relative;">
+      <!-- Per-canvas scrubber line now drawn in chart functions -->
+      <div id="scrubber-line" style="display:none;"></div>
+      <div id="scrubber-tip" style="
+        position:absolute; top:8px;
+        background:rgba(10,12,14,0.92);
+        border:1px solid var(--border-bright);
+        padding:7px 10px; font-size:0.68rem; line-height:1.7;
+        pointer-events:none; display:none; z-index:11;
+        white-space:nowrap; color:var(--text);
+        font-family:'JetBrains Mono',monospace;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+    "></div>
+      <div id="empty">
+        <div class="big">NO DATA YET</div>
+        <div class="sm">Waiting for sequence frames…</div>
+      </div>
+
+      <!-- EV + Sun Altitude -->
+      <div class="chart-row tall">
+        <div class="chart-label">
+          <div class="lbl-name" style="color:var(--gold)">EV</div>
+          <div class="lbl-cur" id="cur-ev" style="color:var(--gold)">—</div>
+          <div class="lbl-unit">scene EV</div>
+          <div style="margin-top:6px;">
+            <div class="lbl-name" style="color:var(--cyan); opacity:0.6;">SUN ALT</div>
+            <div class="lbl-cur" id="cur-sun" style="color:var(--cyan); font-size:0.78rem;">—</div>
+          </div>
+        </div>
+        <canvas id="c-ev"></canvas>
+      </div>
+
+      <!-- Shutter Speed -->
+      <div class="chart-row">
+        <div class="chart-label">
+          <div class="lbl-name" style="color:var(--green)">Shutter</div>
+          <div class="lbl-cur" id="cur-shutter" style="color:var(--green)">—</div>
+          <div class="lbl-unit">seconds (log)</div>
+        </div>
+        <canvas id="c-shutter"></canvas>
+      </div>
+
+      <!-- ISO -->
+      <div class="chart-row thin">
+        <div class="chart-label">
+          <div class="lbl-name" style="color:var(--purple)">ISO</div>
+          <div class="lbl-cur" id="cur-iso" style="color:var(--purple)">—</div>
+          <div class="lbl-unit">sensitivity</div>
+        </div>
+        <canvas id="c-iso"></canvas>
+      </div>
+
+      <!-- Kelvin / White Balance -->
+      <div class="chart-row thin">
+        <div class="chart-label">
+          <div class="lbl-name" style="color:var(--teal)">WB / K</div>
+          <div class="lbl-cur" id="cur-wb" style="color:var(--teal)">—</div>
+          <div class="lbl-unit">kelvin</div>
+        </div>
+        <canvas id="c-wb"></canvas>
+      </div>
+
+      <!-- Interval -->
+      <div class="chart-row thin">
+        <div class="chart-label">
+          <div class="lbl-name" style="color:var(--cyan)">Interval</div>
+          <div class="lbl-cur" id="cur-interval" style="color:var(--cyan)">—</div>
+          <div class="lbl-unit">seconds</div>
+        </div>
+        <canvas id="c-interval"></canvas>
+      </div>
+
+      <!-- ── Motor positions ── -->
+      <div class="chart-row thin" id="row-slider" style="display:none">
+        <div class="chart-label">
+          <div class="lbl-name" style="color:#ff40c0">Slider</div>
+          <div class="lbl-cur" id="cur-slider" style="color:#ff40c0">—</div>
+          <div class="lbl-unit">mm</div>
+        </div>
+        <canvas id="c-slider"></canvas>
+      </div>
+
+      <div class="chart-row thin" id="row-pan" style="display:none">
+        <div class="chart-label">
+          <div class="lbl-name" style="color:#ff40c0">Pan</div>
+          <div class="lbl-cur" id="cur-pan" style="color:#ff40c0">—</div>
+          <div class="lbl-unit">degrees</div>
+        </div>
+        <canvas id="c-pan"></canvas>
+      </div>
+
+      <div class="chart-row thin" id="row-tilt" style="display:none">
+        <div class="chart-label">
+          <div class="lbl-name" style="color:#ff40c0">Tilt</div>
+          <div class="lbl-cur" id="cur-tilt" style="color:#ff40c0">—</div>
+          <div class="lbl-unit">degrees</div>
+        </div>
+        <canvas id="c-tilt"></canvas>
+      </div>
+
+    </div>
+
+    <!-- Preview bar: sequence player | live view | latest capture -->
+    <div id="preview-bar" style="
+      background: var(--bg2);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 1px;
+      flex-shrink: 0;
+      height: 300px;
+      overflow: hidden;
+  ">
+      <!-- Panel 1: Sequence player (canvas-based flipbook) -->
+      <div style="background:var(--bg); display:flex; flex-direction:column; overflow:hidden;">
+        <div style="padding:4px 10px; font-size:0.6rem; color:var(--text-dim);
+                  letter-spacing:0.08em; text-transform:uppercase; flex-shrink:0;
+                  border-bottom:1px solid var(--border); display:flex; align-items:center; gap:8px;">
+          <span>Sequence</span>
+          <span id="seq-frame-label" style="color:var(--text-muted);">— / —</span>
+          <span style="margin-left:auto; display:flex; gap:6px; align-items:center;">
+            <button id="seq-prev" onclick="seqStep(-1)" style="background:none;border:1px solid var(--border-bright);color:var(--text-dim);
+                   font-size:0.65rem;padding:1px 6px;cursor:pointer;font-family:monospace;">◀</button>
+            <button id="seq-play" onclick="seqTogglePlay()" style="background:none;border:1px solid var(--border-bright);color:var(--green);
+                   font-size:0.65rem;padding:1px 6px;cursor:pointer;font-family:monospace;">▶ PLAY</button>
+            <button id="seq-next" onclick="seqStep(1)" style="background:none;border:1px solid var(--border-bright);color:var(--text-dim);
+                   font-size:0.65rem;padding:1px 6px;cursor:pointer;font-family:monospace;">▶</button>
+            <button id="seq-live" onclick="seqGoLive()" style="background:rgba(0,255,136,0.08);border:1px solid var(--green);color:var(--green);
+                   font-size:0.6rem;padding:1px 6px;cursor:pointer;font-family:monospace;">LIVE</button>
+            <button onclick="seqOpenFullscreen()" title="Fullscreen" style="background:none;border:1px solid var(--border-bright);color:var(--text-dim);
+                   font-size:0.75rem;padding:1px 5px;cursor:pointer;font-family:monospace;line-height:1;">⛶</button>
+          </span>
+        </div>
+        <div
+          style="flex:1; display:flex; align-items:center; justify-content:center; overflow:hidden; position:relative;">
+          <canvas id="seq-canvas" style="max-width:100%; max-height:100%; display:block;"></canvas>
+          <div id="seq-empty" style="position:absolute;font-size:0.7rem;color:var(--text-muted);
+                                   letter-spacing:0.05em;">NO FRAMES YET</div>
+        </div>
+      </div>
+
+      <!-- Fullscreen overlay — shared frame cache, separate canvas -->
+      <div id="seq-fs-overlay" style="
+          display:none; position:fixed; inset:0; z-index:1000;
+          background:#000; flex-direction:column;">
+        <!-- Header bar -->
+        <div style="display:flex; align-items:center; gap:10px; padding:8px 14px;
+                    background:rgba(0,0,0,0.7); flex-shrink:0;">
+          <span style="font-size:0.65rem; color:#888; letter-spacing:0.1em; text-transform:uppercase;">
+            Sequence
+          </span>
+          <span id="seq-fs-frame-label" style="font-size:0.65rem; color:#555; font-family:monospace;">— / —</span>
+          <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+            <button onclick="seqStep(-1)" style="background:none;border:1px solid #444;color:#aaa;
+                   font-size:0.8rem;padding:3px 10px;cursor:pointer;font-family:monospace;">◀</button>
+            <button id="seq-fs-play" onclick="seqTogglePlay()" style="background:none;border:1px solid var(--green);color:var(--green);
+                   font-size:0.8rem;padding:3px 12px;cursor:pointer;font-family:monospace;">▶ PLAY</button>
+            <button onclick="seqStep(1)" style="background:none;border:1px solid #444;color:#aaa;
+                   font-size:0.8rem;padding:3px 10px;cursor:pointer;font-family:monospace;">▶</button>
+            <button onclick="seqGoLive()" style="background:rgba(0,255,136,0.08);border:1px solid var(--green);color:var(--green);
+                   font-size:0.75rem;padding:3px 10px;cursor:pointer;font-family:monospace;">LIVE</button>
+            <button onclick="seqCloseFullscreen()" style="background:none;border:1px solid #555;color:#aaa;
+                   font-size:0.85rem;padding:3px 10px;cursor:pointer;font-family:monospace;" title="Close (Esc)">✕</button>
+          </div>
+        </div>
+        <!-- Canvas fills remaining space -->
+        <div style="flex:1; display:flex; align-items:center; justify-content:center; overflow:hidden;">
+          <canvas id="seq-canvas-fs" style="max-width:100%; max-height:100%; display:block;"></canvas>
+        </div>
+        <!-- Scrubber -->
+        <div style="padding:8px 14px; background:rgba(0,0,0,0.7); flex-shrink:0;">
+          <input id="seq-fs-scrubber" type="range" min="0" value="0"
+                 style="width:100%; accent-color:var(--green); cursor:pointer;"
+                 oninput="seqScrub(parseInt(this.value))">
+        </div>
+      </div>
+
+      <!-- Panel 2: Live camera feed -->
+      <div style="background:var(--bg); display:flex; flex-direction:column; overflow:hidden;">
+        <div style="padding:4px 10px; font-size:0.6rem; color:var(--text-dim);
+                  letter-spacing:0.08em; text-transform:uppercase; flex-shrink:0;
+                  border-bottom:1px solid var(--border);">
+          <span style="display:inline-block; width:6px; height:6px; border-radius:50%;
+                     background:var(--green); margin-right:5px;
+                     animation:pulse 2s infinite; vertical-align:middle;"></span>
+          Live View
+        </div>
+        <div style="flex:1; display:flex; align-items:center; justify-content:center; overflow:hidden;">
+          <img src="/video_feed" style="max-height:100%; max-width:100%; object-fit:contain; display:block;"
+            onerror="this.style.opacity='0.15'" />
+        </div>
+      </div>
+
+      <!-- Panel 3: Latest capture with crossfade -->
+      <div style="background:var(--bg); display:flex; flex-direction:column; overflow:hidden;">
+        <div style="padding:4px 10px; font-size:0.6rem; color:var(--text-dim);
+                  letter-spacing:0.08em; text-transform:uppercase; flex-shrink:0;
+                  border-bottom:1px solid var(--border); display:flex; align-items:center; gap:6px;">
+          <span id="trigger-dot" style="
+            display:inline-block; width:6px; height:6px; border-radius:50%;
+            background:var(--gold); margin-right:2px; vertical-align:middle;
+            opacity:0; transition:opacity 0.1s;"></span>
+          Latest Capture
+          <span id="latest-frame-label" style="margin-left:auto; color:var(--text-muted);">—</span>
+        </div>
+        <div style="flex:1; position:relative; overflow:hidden;">
+          <img id="latest-cap-img" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;" />
+        </div>
+      </div>
+    </div>
+
+    <div id="legend">
+      <div class="legend-item">
+        <div class="legend-swatch" style="background:rgba(255,170,0,0.35)"></div>Day
+      </div>
+      <div class="legend-item">
+        <div class="legend-swatch" style="background:rgba(255,80,20,0.4)"></div>Golden
+      </div>
+      <div class="legend-item">
+        <div class="legend-swatch" style="background:rgba(120,60,220,0.4)"></div>Twilight
+      </div>
+      <div class="legend-item">
+        <div class="legend-swatch" style="background:rgba(30,50,120,0.5)"></div>Night
+      </div>
+      <div class="legend-item" style="margin-left:auto;">
+        <div class="legend-swatch" style="background:var(--gold)"></div>EV
+      </div>
+      <div class="legend-item">
+        <div class="legend-swatch" style="background:var(--cyan); opacity:0.6"></div>Sun alt
+      </div>
+      <div class="legend-item">
+        <div class="legend-swatch" style="background:var(--green)"></div>Shutter
+      </div>
+      <div class="legend-item">
+        <div class="legend-swatch" style="background:var(--purple)"></div>ISO
+      </div>
+      <div class="legend-item">
+        <div class="legend-swatch" style="background:var(--teal)"></div>WB
+      </div>
+      <div class="legend-item">
+        <div class="legend-swatch" style="background:var(--cyan)"></div>Interval
+      </div>
+      <div class="legend-item" id="legend-motion" style="display:none">
+        <div class="legend-swatch" style="background:#ff40c0"></div>Motion
+      </div>
+    </div>
+  </div>
+
+  <script>
+    "use strict";
+
+    // ── Data store ────────────────────────────────────────────────────────────────
+    const frames = [];   // [{frame, hg_ev, hg_shutter_s, hg_iso, hg_kelvin,
+    //   hg_phase, hg_sun_alt, current_interval, hg_ev_slope,
+    //   hg_confidence, hg_tracker_warm}]
+
+    // ── Canvas refs ───────────────────────────────────────────────────────────────
+    const canvases = {
+      ev: document.getElementById('c-ev'),
+      shutter: document.getElementById('c-shutter'),
+      iso: document.getElementById('c-iso'),
+      wb: document.getElementById('c-wb'),
+      interval: document.getElementById('c-interval'),
+      slider: document.getElementById('c-slider'),
+      pan: document.getElementById('c-pan'),
+      tilt: document.getElementById('c-tilt'),
+      slope: null, // removed — canvas element deleted
+    };
+    const ctxs = {};
+    for (const [k, c] of Object.entries(canvases)) {
+      if (c) ctxs[k] = c.getContext('2d');
+    }
+
+    // ── CSS colours ───────────────────────────────────────────────────────────────
+    const C = {
+      bg: '#0a0c0e',
+      bg2: '#0f1215',
+      border: '#1e2530',
+      green: '#00ff88',
+      cyan: '#00d4ff',
+      gold: '#ffaa00',
+      red: '#ff3344',
+      purple: '#aa66ff',
+      teal: '#00ccaa',
+      magenta: '#ff40c0',
+      textDim: '#5a6a7a',
+    };
+
+    const PHASE_FILL = {
+      day: 'rgba(255,170,0,0.07)',
+      golden: 'rgba(255,80,20,0.10)',
+      twilight: 'rgba(120,60,220,0.10)',
+      night: 'rgba(20,30,100,0.22)',
+    };
+
+    // ── Resize canvases to physical pixels ───────────────────────────────────────
+    function resizeCanvas(c) {
+      const rect = c.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const nw = Math.floor(rect.width * dpr);
+      const nh = Math.floor(rect.height * dpr);
+      if (c.width !== nw || c.height !== nh) {
+        c.width = nw;
+        c.height = nh;
+      }
+      const ctx = c.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // Reset scale to prevent accumulation
+      return rect;
+    }
+
+    function resizeAll() {
+      for (const c of Object.values(canvases)) if (c) resizeCanvas(c);
+      drawAll();
+    }
+
+    window.addEventListener('resize', resizeAll);
+
+    // ── Drawing helpers ───────────────────────────────────────────────────────────
+    function drawPhaseBackground(ctx, w, h, xs) {
+      if (!xs.length) return;
+      let prevPhase = null, startX = 0;
+
+      for (let i = 0; i < xs.length; i++) {
+        const f = frames[i];
+        const phase = f.hg_phase || 'day';
+        if (phase !== prevPhase) {
+          if (prevPhase && PHASE_FILL[prevPhase]) {
+            ctx.fillStyle = PHASE_FILL[prevPhase];
+            ctx.fillRect(startX, 0, xs[i] - startX, h);
+          }
+          startX = xs[i];
+          prevPhase = phase;
+        }
+      }
+      // Last segment
+      if (prevPhase && PHASE_FILL[prevPhase]) {
+        ctx.fillStyle = PHASE_FILL[prevPhase];
+        ctx.fillRect(startX, 0, w - startX, h);
+      }
+    }
+
+    function drawGridH(ctx, w, h, count, colour) {
+      ctx.strokeStyle = colour || C.border;
+      ctx.lineWidth = 0.5;
+      for (let i = 0; i <= count; i++) {
+        const y = h * (i / count);
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+      }
+    }
+
+    function drawLine(ctx, xs, ys, colour, lineWidth = 2.5, glow = false) {
+      if (xs.length < 2) return;
+      ctx.save();
+      ctx.setLineDash([]);
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+
+      if (glow) {
+        ctx.strokeStyle = colour;
+        ctx.lineWidth = lineWidth * 3;
+        ctx.globalAlpha = 0.12;
+        ctx.beginPath();
+        ctx.moveTo(xs[0], ys[0]);
+        for (let i = 1; i < xs.length; i++) {
+          if (xs[i] != null && ys[i] != null) ctx.lineTo(xs[i], ys[i]);
+        }
+        ctx.stroke();
+      }
+
+      ctx.globalAlpha = 1.0;
+      ctx.strokeStyle = colour;
+      ctx.lineWidth = lineWidth;
+      ctx.beginPath();
+      ctx.moveTo(xs[0], ys[0]);
+      for (let i = 1; i < xs.length; i++) {
+        if (xs[i] != null && ys[i] != null) ctx.lineTo(xs[i], ys[i]);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawDots(ctx, xs, ys, colour, r = 2) {
+      ctx.fillStyle = colour;
+      for (let i = 0; i < xs.length; i++) {
+        ctx.beginPath();
+        ctx.arc(xs[i], ys[i], r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    function drawAxisLabel(ctx, text, x, y, colour) {
+      ctx.fillStyle = colour || C.textDim;
+      ctx.font = '9px JetBrains Mono';
+      ctx.fillText(text, x, y);
+    }
+
+    function _drawScrubberHairline(ctx, x, h) {
+      if (x == null) return;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([5, 4]);
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, h);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Map value to Y pixel (top = max, bottom = min)
+    function mapY(v, min, max, h, pad = 10) {
+      if (max === min) return h / 2;
+      return pad + (1 - (v - min) / (max - min)) * (h - 2 * pad);
+    }
+
+    // ── Chart: EV + Sun altitude ──────────────────────────────────────────────────
+    function drawEV(c, ctx) {
+      const rect = c.getBoundingClientRect();
+      const w = rect.width, h = rect.height;
+      ctx.clearRect(0, 0, w, h);
+      if (!frames.length) return;
+
+      const n = frames.length;
+      const pad = 10;
+      const xs = frames.map((_, i) => pad + (i / Math.max(n - 1, 1)) * (w - 2 * pad));
+
+      drawPhaseBackground(ctx, w, h, xs);
+      drawGridH(ctx, w, h, 4);
+
+      const evs = frames.map(f => f.hg_ev ?? 0);   // TTL EV (drives camera)
+      const evScenes = frames.map(f => f.hg_ev_scene ?? f.hg_ev ?? 0); // Scene EV (absolute light)
+      const alts = frames.map(f => f.hg_sun_alt ?? 0);
+      const allEvs = [...evs, ...evScenes];
+      const evMin = Math.min(...allEvs) - 0.3;
+      const evMax = Math.max(...allEvs) + 0.3;
+      const altMin = Math.min(-12, Math.min(...alts));
+      const altMax = Math.max(90, Math.max(...alts));
+
+      // Sun altitude — dashed cyan line
+      const altYs = alts.map(v => mapY(v, altMin, altMax, h));
+      ctx.setLineDash([4, 6]);
+      drawLine(ctx, xs, altYs, 'rgba(0,212,255,0.4)', 1.5);
+      ctx.setLineDash([]);
+
+      // Sunrise/sunset zero line
+      const zeroY = mapY(0, altMin, altMax, h);
+      ctx.strokeStyle = 'rgba(0,212,255,0.15)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 8]);
+      ctx.beginPath(); ctx.moveTo(0, zeroY); ctx.lineTo(w, zeroY); ctx.stroke();
+      ctx.setLineDash([]);
+
+      // EV line — gold, filled area
+      const evYs = evs.map(v => mapY(v, evMin, evMax, h));
+      const gradient = ctx.createLinearGradient(0, 0, 0, h);
+      gradient.addColorStop(0, 'rgba(255,170,0,0.25)');
+      gradient.addColorStop(1, 'rgba(255,170,0,0.02)');
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.moveTo(xs[0], h);
+      for (let i = 0; i < xs.length; i++) ctx.lineTo(xs[i], evYs[i]);
+      ctx.lineTo(xs[xs.length - 1], h);
+      ctx.closePath();
+      ctx.fill();
+
+      drawLine(ctx, xs, evYs, C.gold, 2.8, true);
+
+      // Scene EV — absolute light level independent of camera settings, dashed amber
+      const evSceneYs = evScenes.map(v => mapY(v, evMin, evMax, h));
+      ctx.save();
+      ctx.setLineDash([4, 6]);
+      drawLine(ctx, xs, evSceneYs, 'rgba(255,200,90,0.6)', 1.5);
+      ctx.setLineDash([]);
+      ctx.restore();
+
+      // Latest dot (TTL EV)
+      const lx = xs[xs.length - 1], ly = evYs[evYs.length - 1];
+      ctx.fillStyle = C.gold;
+      ctx.beginPath(); ctx.arc(lx, ly, 3.5, 0, Math.PI * 2); ctx.fill();
+      drawAxisLabel(ctx, '— TTL', w - pad - 4, ly - 4, 'rgba(255,170,0,0.75)');
+
+      // Latest dot (Scene EV)
+      const lsx = xs[xs.length - 1], lsy = evSceneYs[evSceneYs.length - 1];
+      ctx.fillStyle = 'rgba(255,200,90,0.55)';
+      ctx.beginPath(); ctx.arc(lsx, lsy, 3.5, 0, Math.PI * 2); ctx.fill();
+      drawAxisLabel(ctx, '— SCENE', w - pad - 4, lsy + 8, 'rgba(255,200,90,0.55)');
+
+      if (_scrubFrame !== null) _drawScrubberHairline(ctx, xs[_scrubFrame], h);
+
+      // EV axis labels
+      drawAxisLabel(ctx, evMax.toFixed(1), pad, 14, C.gold);
+      drawAxisLabel(ctx, evMin.toFixed(1), pad, h - 3, C.gold);
+      drawAxisLabel(ctx, '─ TTL', w - 62, 12, C.gold);
+      drawAxisLabel(ctx, '╌ SCENE', w - 70, 24, 'rgba(255,200,90,0.8)');
+    }
+
+    // ── Chart: Shutter speed (log scale) ─────────────────────────────────────────
+    function drawShutter(c, ctx) {
+      const rect = c.getBoundingClientRect();
+      const w = rect.width, h = rect.height;
+      ctx.clearRect(0, 0, w, h);
+      if (!frames.length) return;
+
+      const n = frames.length;
+      const pad = 10;
+      const xs = frames.map((_, i) => pad + (i / Math.max(n - 1, 1)) * (w - 2 * pad));
+
+      drawPhaseBackground(ctx, w, h, xs);
+      drawGridH(ctx, w, h, 3);
+
+      const ss = frames.map(f => Math.max(f.hg_shutter_s || 1 / 8000, 1 / 8000));
+      const logSS = ss.map(v => Math.log2(v));
+      const lMin = Math.min(...logSS) - 0.3;
+      const lMax = Math.max(...logSS) + 0.3;
+      const ys = logSS.map(v => mapY(v, lMin, lMax, h));
+
+      const grad = ctx.createLinearGradient(0, 0, 0, h);
+      grad.addColorStop(0, 'rgba(0,255,136,0.2)');
+      grad.addColorStop(1, 'rgba(0,255,136,0.01)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.moveTo(xs[0], h);
+      for (let i = 0; i < xs.length; i++) ctx.lineTo(xs[i], ys[i]);
+      ctx.lineTo(xs[xs.length - 1], h);
+      ctx.closePath(); ctx.fill();
+
+      drawLine(ctx, xs, ys, C.green, 2.5, true);
+
+      // Latest dot
+      const lx = xs[xs.length - 1], ly = ys[ys.length - 1];
+      ctx.fillStyle = C.green;
+      ctx.beginPath(); ctx.arc(lx, ly, 3, 0, Math.PI * 2); ctx.fill();
+
+      // Shutter labels (log)
+      const topShutter = 2 ** lMax;
+      const botShutter = 2 ** lMin;
+      const fmt = v => v >= 1 ? `${v.toFixed(1)}s` : `1/${Math.round(1 / v)}`;
+      drawAxisLabel(ctx, fmt(topShutter), pad, 12, C.green);
+      drawAxisLabel(ctx, fmt(botShutter), pad, h - 3, C.green);
+
+      if (_scrubFrame !== null) _drawScrubberHairline(ctx, xs[_scrubFrame], h);
+    }
+
+    // ── Chart: ISO ────────────────────────────────────────────────────────────────
+    function drawISO(c, ctx) {
+      const rect = c.getBoundingClientRect();
+      const w = rect.width, h = rect.height;
+      ctx.clearRect(0, 0, w, h);
+      if (!frames.length) return;
+
+      const n = frames.length;
+      const pad = 10;
+      const xs = frames.map((_, i) => pad + (i / Math.max(n - 1, 1)) * (w - 2 * pad));
+
+      drawPhaseBackground(ctx, w, h, xs);
+      drawGridH(ctx, w, h, 2);
+
+      const isos = frames.map(f => f.hg_iso || 100);
+      const iMin = Math.min(...isos);
+      const iMax = Math.max(...isos);
+      const ys = isos.map(v => mapY(v, Math.min(iMin, 80), Math.max(iMax, 3200), h));
+
+      drawLine(ctx, xs, ys, C.purple, 2.2, true);
+      drawDots(ctx, xs.filter((_, i) => i === 0 || isos[i] !== isos[i - 1]),
+        ys.filter((_, i) => i === 0 || isos[i] !== isos[i - 1]),
+        C.purple, 3.5);
+
+      // Latest
+      const lx = xs[xs.length - 1], ly = ys[ys.length - 1];
+      ctx.fillStyle = C.purple;
+      ctx.beginPath(); ctx.arc(lx, ly, 3, 0, Math.PI * 2); ctx.fill();
+
+      drawAxisLabel(ctx, String(Math.max(...isos)), pad, 11, C.purple);
+      drawAxisLabel(ctx, String(Math.min(...isos)), pad, h - 3, C.purple);
+
+      if (_scrubFrame !== null) _drawScrubberHairline(ctx, xs[_scrubFrame], h);
+    }
+
+    // ── Chart: White Balance ──────────────────────────────────────────────────────
+    function drawWB(c, ctx) {
+      const rect = c.getBoundingClientRect();
+      const w = rect.width, h = rect.height;
+      ctx.clearRect(0, 0, w, h);
+      if (!frames.length) return;
+
+      const n = frames.length;
+      const pad = 10;
+      const xs = frames.map((_, i) => pad + (i / Math.max(n - 1, 1)) * (w - 2 * pad));
+
+      drawPhaseBackground(ctx, w, h, xs);
+      drawGridH(ctx, w, h, 2);
+
+      const ks = frames.map(f => f.hg_kelvin || 5500);
+      const kMin = Math.min(...ks);
+      const kMax = Math.max(...ks);
+      const ys = ks.map(v => mapY(v, Math.min(kMin, 2800), Math.max(kMax, 6500), h));
+
+      drawLine(ctx, xs, ys, C.teal, 2.5, true);
+
+      const lx = xs[xs.length - 1], ly = ys[ys.length - 1];
+      ctx.fillStyle = C.teal;
+      ctx.beginPath(); ctx.arc(lx, ly, 3, 0, Math.PI * 2); ctx.fill();
+
+      drawAxisLabel(ctx, kMax + 'K', pad, 11, C.teal);
+      drawAxisLabel(ctx, kMin + 'K', pad, h - 3, C.teal);
+
+      if (_scrubFrame !== null) _drawScrubberHairline(ctx, xs[_scrubFrame], h);
+    }
+
+    // ── Chart: Interval ───────────────────────────────────────────────────────────
+    function drawInterval(c, ctx) {
+      const rect = c.getBoundingClientRect();
+      const w = rect.width, h = rect.height;
+      ctx.clearRect(0, 0, w, h);
+      if (!frames.length) return;
+
+      const n = frames.length;
+      const pad = 10;
+      const xs = frames.map((_, i) => pad + (i / Math.max(n - 1, 1)) * (w - 2 * pad));
+
+      drawPhaseBackground(ctx, w, h, xs);
+      drawGridH(ctx, w, h, 2);
+
+      const ivs = frames.map(f => f.current_interval || 5);
+      const iMin = Math.min(...ivs);
+      const iMax = Math.max(...ivs);
+      const ys = ivs.map(v => mapY(v, Math.max(0, iMin - 1), iMax + 1, h));
+
+      drawLine(ctx, xs, ys, C.cyan, 2.5, true);
+
+      const lx = xs[xs.length - 1], ly = ys[ys.length - 1];
+      ctx.fillStyle = C.cyan;
+      ctx.beginPath(); ctx.arc(lx, ly, 3, 0, Math.PI * 2); ctx.fill();
+
+      drawAxisLabel(ctx, iMax.toFixed(0) + 's', pad, 11, C.cyan);
+      drawAxisLabel(ctx, iMin.toFixed(0) + 's', pad, h - 3, C.cyan);
+
+      if (_scrubFrame !== null) _drawScrubberHairline(ctx, xs[_scrubFrame], h);
+    }
+
+    // ── Chart: Motor axis (slider mm / pan deg / tilt deg) ───────────────────────
+    function _hasMotionData() {
+      return frames.some(f => f.pos_s != null || f.pos_p != null || f.pos_t != null);
+    }
+
+    function drawMotorAxis(c, ctx, key, unit) {
+      const rect = resizeCanvas(c);   // ensure canvas is properly sized before drawing
+      const w = rect.width, h = rect.height;
+      if (w < 2 || h < 2) return;    // still hidden or zero-size — skip
+      ctx.clearRect(0, 0, w, h);
+      if (!frames.length) return;
+
+      const n = frames.length;
+      const pad = 10;
+      const xs = frames.map((_, i) => pad + (i / Math.max(n - 1, 1)) * (w - 2 * pad));
+
+      drawPhaseBackground(ctx, w, h, xs);
+      drawGridH(ctx, w, h, 2);
+
+      const vals = frames.map(f => f[key] ?? null);
+      const defined = vals.filter(v => v != null);
+      if (!defined.length) return;
+
+      const vMin = Math.min(...defined);
+      const vMax = Math.max(...defined);
+      const margin = Math.max(0.5, (vMax - vMin) * 0.1);
+      const ys = vals.map(v => v != null ? mapY(v, vMin - margin, vMax + margin, h) : null);
+
+      drawLine(ctx, xs, ys, C.magenta, 2.5, true);
+
+      const last = vals[vals.length - 1];
+      if (last != null) {
+        const lx = xs[xs.length - 1], ly = ys[ys.length - 1];
+        ctx.fillStyle = C.magenta;
+        ctx.beginPath(); ctx.arc(lx, ly, 3, 0, Math.PI * 2); ctx.fill();
+      }
+
+      const fmt = v => unit === 'mm' ? v.toFixed(1) + 'mm' : v.toFixed(1) + '°';
+      drawAxisLabel(ctx, fmt(vMax), pad, 11, C.magenta);
+      drawAxisLabel(ctx, fmt(vMin), pad, h - 3, C.magenta);
+
+      if (_scrubFrame !== null) _drawScrubberHairline(ctx, xs[_scrubFrame], h);
+    }
+
+    // Show/hide motor rows depending on whether data exists
+    function _updateMotorRowVisibility() {
+      const has = _hasMotionData();
+      let madeVisible = false;
+      ['slider', 'pan', 'tilt'].forEach(ax => {
+        const row = document.getElementById('row-' + ax);
+        if (!row) return;
+        const wasHidden = row.style.display === 'none';
+        row.style.display = has ? '' : 'none';
+        if (has && wasHidden) madeVisible = true;
+      });
+      const leg = document.getElementById('legend-motion');
+      if (leg) leg.style.display = has ? '' : 'none';
+      // When rows transition from hidden → visible their canvases were sized 0×0.
+      // Resize them now so drawAll() has valid pixel dimensions to draw into.
+      if (madeVisible) {
+        ['slider', 'pan', 'tilt'].forEach(ax => {
+          const c = canvases[ax];
+          if (c) resizeCanvas(c);
+        });
+      }
+    }
+
+    // ── Chart: EV Slope ───────────────────────────────────────────────────────────
+    // ── Draw all ──────────────────────────────────────────────────────────────────
+    function drawAll() {
+      if (!frames.length) return;
+      drawEV(canvases.ev, ctxs.ev);
+      drawShutter(canvases.shutter, ctxs.shutter);
+      drawISO(canvases.iso, ctxs.iso);
+      drawWB(canvases.wb, ctxs.wb);
+      drawInterval(canvases.interval, ctxs.interval);
+      if (_hasMotionData()) {
+        if (canvases.slider && ctxs.slider) drawMotorAxis(canvases.slider, ctxs.slider, 'pos_s', 'mm');
+        if (canvases.pan    && ctxs.pan)    drawMotorAxis(canvases.pan,    ctxs.pan,    'pos_p', 'deg');
+        if (canvases.tilt   && ctxs.tilt)   drawMotorAxis(canvases.tilt,   ctxs.tilt,   'pos_t', 'deg');
+      }
+    }
+
+    // ── Update header stats ───────────────────────────────────────────────────────
+    function updateStats(f) {
+      const fmtShutter = s => s >= 1 ? `${s.toFixed(1)}s` : `1/${Math.round(1 / s)}`;
+      document.getElementById('statFrame').textContent = String(f.frame || 0).padStart(3, '0') + ' / ' + (f.total || '—');
+      document.getElementById('statPhase').textContent = (f.hg_phase || '—').toUpperCase();
+      document.getElementById('statEV').textContent = (f.hg_ev ?? '—').toFixed ? (f.hg_ev).toFixed(2) : '—';
+      document.getElementById('statShutter').textContent = fmtShutter(f.hg_shutter_s || 1 / 125);
+      document.getElementById('statISO').textContent = f.hg_iso || '—';
+      document.getElementById('statInterval').textContent = (f.current_interval || '—').toFixed ? (f.current_interval).toFixed(0) + 's' : '—';
+
+      document.getElementById('cur-ev').textContent = (f.hg_ev ?? '—').toFixed ? (f.hg_ev).toFixed(2) : '—';
+      document.getElementById('cur-sun').textContent = (f.hg_sun_alt ?? '—').toFixed ? (f.hg_sun_alt).toFixed(1) + '°' : '—';
+      document.getElementById('cur-shutter').textContent = fmtShutter(f.hg_shutter_s || 1 / 125);
+      document.getElementById('cur-iso').textContent = f.hg_iso || '—';
+      document.getElementById('cur-wb').textContent = (f.hg_kelvin || '—') + (f.hg_kelvin ? 'K' : '');
+      document.getElementById('cur-interval').textContent = (f.current_interval ?? '—').toFixed ? (f.current_interval).toFixed(0) + 's' : '—';
+      // Motor positions
+      const slEl = document.getElementById('cur-slider');
+      const paEl = document.getElementById('cur-pan');
+      const tiEl = document.getElementById('cur-tilt');
+      if (slEl) slEl.textContent = f.pos_s != null ? f.pos_s.toFixed(1) + 'mm' : '—';
+      if (paEl) paEl.textContent = f.pos_p != null ? f.pos_p.toFixed(1) + '°'  : '—';
+      if (tiEl) tiEl.textContent = f.pos_t != null ? f.pos_t.toFixed(1) + '°'  : '—';
+    }
+
+    // ── Ingest a new frame ────────────────────────────────────────────────────────
+    // ── Sequence player ──────────────────────────────────────────────────────────
+    // Flipbook: loads thumbnails into an off-screen Image cache, paints to canvas.
+    // The playhead is driven by:
+    //   • hover scrubber (graph mouse move)
+    //   • play/pause auto-advance
+    //   • new frame arriving while in LIVE mode
+
+    const _imgCache = {};   // frame_id → HTMLImageElement (loaded)
+    let _seqIndex = 0;    // current playhead index into frames[]
+    let _seqLive = true; // follow newest frame automatically
+    let _seqPlaying = false;
+    let _seqTimer = null;
+    let _knownThumbs = new Set();
+
+    function _fmtFrameId(n) {
+      return String(n).padStart(4, '0');
+    }
+
+    let _runId = '';   // per-run ID from server — busts thumb cache when a new sequence starts
+
+    function _preloadThumb(frameNum, attempt, frameId) {
+      attempt = attempt || 0;
+      // Use pre-formatted frameId if provided (avoids off-by-one: counter=1, file=0000)
+      const id = frameId || _fmtFrameId(frameNum);
+      if (_imgCache[id] && _imgCache[id].complete && _imgCache[id].naturalWidth) return _imgCache[id];
+      const img = new Image();
+      img.src = `/thumbs/${id}?r=${_runId}&t=${Date.now()}`;
+      img.onerror = () => {
+        delete _imgCache[id];
+        if (attempt < 8) {
+          setTimeout(() => _preloadThumb(frameNum, attempt + 1, frameId), 1500 + attempt * 500);
+        }
+      };
+      _imgCache[id] = img;
+      return img;
+    }
+
+    function _paintToCanvas(c, img, id) {
+      if (!c) return;
+      const ctx = c.getContext('2d');
+      const par = c.parentElement;
+      const pw = par.clientWidth, ph = par.clientHeight;
+      if (c.width !== pw || c.height !== ph) { c.width = pw; c.height = ph; }
+      ctx.clearRect(0, 0, pw, ph);
+      ctx.fillStyle = '#0a0c0e';
+      ctx.fillRect(0, 0, pw, ph);
+      if (!img || !img.complete || !img.naturalWidth) {
+        ctx.fillStyle = '#1e2530';
+        ctx.font = '11px JetBrains Mono';
+        ctx.textAlign = 'center';
+        ctx.fillText(`Loading ${id}…`, pw / 2, ph / 2);
+        ctx.textAlign = 'left';
+        return;
+      }
+      const scale = Math.min(pw / img.naturalWidth, ph / img.naturalHeight);
+      const dw = img.naturalWidth * scale, dh = img.naturalHeight * scale;
+      ctx.drawImage(img, (pw - dw) / 2, (ph - dh) / 2, dw, dh);
+    }
+
+    function _paintSeqCanvas(frameNum) {
+      const id  = _fmtFrameId(frameNum);
+      const img = _imgCache[id];
+      _paintToCanvas(document.getElementById('seq-canvas'), img, id);
+      // Mirror to fullscreen canvas if overlay is open
+      const overlay = document.getElementById('seq-fs-overlay');
+      if (overlay && overlay.style.display !== 'none') {
+        _paintToCanvas(document.getElementById('seq-canvas-fs'), img, id);
+      }
+      document.getElementById('seq-empty').style.display = 'none';
+    }
+
+    function _seqUpdateLabel() {
+      const idx = _seqIndex;
+      const f   = frames[idx];
+      if (!f) return;
+      const txt = `${String(f.frame).padStart(4,'0')} / ${String(frames.length - 1).padStart(4,'0')}`;
+      const lbl    = document.getElementById('seq-frame-label');
+      const lblFs  = document.getElementById('seq-fs-frame-label');
+      const scrub  = document.getElementById('seq-fs-scrubber');
+      if (lbl)   lbl.textContent  = txt;
+      if (lblFs) lblFs.textContent = txt;
+      if (scrub) { scrub.max = Math.max(0, frames.length - 1); scrub.value = idx; }
+    }
+
+    // ── Fullscreen player ─────────────────────────────────────────────────────
+    function seqOpenFullscreen() {
+      const overlay = document.getElementById('seq-fs-overlay');
+      if (!overlay) return;
+      overlay.style.display = 'flex';
+      // Sync play button state
+      _syncFsPlayBtn();
+      // Size fullscreen canvas and repaint current frame
+      requestAnimationFrame(() => {
+        const f = frames[_seqIndex];
+        if (f) _paintSeqCanvas(f.frame);
+        _seqUpdateLabel();
+      });
+    }
+
+    function seqCloseFullscreen() {
+      const overlay = document.getElementById('seq-fs-overlay');
+      if (overlay) overlay.style.display = 'none';
+    }
+
+    function seqScrub(idx) {
+      _seqLive = false;
+      document.getElementById('seq-live').style.background = 'none';
+      seqGoTo(idx);
+    }
+
+    function _syncFsPlayBtn() {
+      const btn    = document.getElementById('seq-play');
+      const btnFs  = document.getElementById('seq-fs-play');
+      if (btn && btnFs) btnFs.textContent = btn.textContent;
+    }
+
+    function seqGoTo(idx) {
+      _seqIndex = Math.max(0, Math.min(frames.length - 1, idx));
+      const f = frames[_seqIndex];
+      if (!f) return;
+      _preloadThumb(f.frame);
+      const id = _fmtFrameId(f.frame);
+      const img = _imgCache[id];
+      const paint = () => { _paintSeqCanvas(f.frame); _seqUpdateLabel(); };
+      if (img && img.complete) { paint(); }
+      else if (img) { img.onload = paint; }
+    }
+
+    function seqStep(delta) {
+      _seqLive = false;
+      document.getElementById('seq-live').style.background = 'none';
+      seqGoTo(_seqIndex + delta);
+    }
+
+    function seqGoLive() {
+      _seqLive = true;
+      document.getElementById('seq-live').style.background = 'rgba(0,255,136,0.08)';
+      if (frames.length) seqGoTo(frames.length - 1);
+    }
+
+    function seqTogglePlay() {
+      _seqPlaying = !_seqPlaying;
+      const btn = document.getElementById('seq-play');
+      if (_seqPlaying) {
+        btn.textContent = '⏸ PAUSE';
+        _seqLive = false;
+        document.getElementById('seq-live').style.background = 'none';
+        _seqTimer = setInterval(_seqAdvance, 80);  // ~12fps looping playback
+      } else {
+        btn.textContent = '▶ PLAY';
+        clearInterval(_seqTimer);
+      }
+      _syncFsPlayBtn();
+    }
+
+    // Loop play — wraps back to frame 0 at end
+    function _seqAdvance() {
+      if (_seqIndex >= frames.length - 1) {
+        seqGoTo(0);   // wrap
+      } else {
+        seqGoTo(_seqIndex + 1);
+      }
+    }
+
+    // Preload all thumbs in batches so flipbook is ready before hover.
+    // Checks _imgCache state (not _knownThumbs) so failed loads are retried.
+    function _preloadAllThumbs() {
+      if (!frames.length) return;
+      const pending = frames.filter(f => {
+        const id = f.frame_id || _fmtFrameId(f.frame);
+        const img = _imgCache[id];
+        return !img || !img.complete || !img.naturalWidth;
+      });
+      if (!pending.length) return;
+      let i = 0;
+      function nextBatch() {
+        pending.slice(i, i + 6).forEach(f => _preloadThumb(f.frame, 0, f.frame_id));
+        i += 6;
+        if (i < pending.length) setTimeout(nextBatch, 600);
+      }
+      nextBatch();
+    }
+
+    // Preload a window of nearby frames for smooth scrubbing
+    function _preloadAround(idx, radius = 5) {
+      for (let i = Math.max(0, idx - radius); i < Math.min(frames.length, idx + radius); i++) {
+        _preloadThumb(frames[i].frame);
+      }
+    }
+
+    async function loadThumbStrip() {
+      // Preloads thumbnails into cache. Uses _preloadThumb (with retry) for every
+      // image that isn't fully loaded yet — including ones that previously failed.
+      try {
+        const res = await fetch('/api/thumb-list');
+        const data = await res.json();
+
+        // If the server signals a new run, clear stale cache from the previous one
+        if (data.run_id && data.run_id !== _runId) {
+          _runId = data.run_id;
+          Object.keys(_imgCache).forEach(k => delete _imgCache[k]);
+          _knownThumbs.clear();
+        }
+
+        for (const id of (data.frame_ids || [])) {
+          _knownThumbs.add(id);
+          const img = _imgCache[id];
+          // Retry any image that isn't fully loaded (including previously failed ones)
+          if (!img || !img.complete || !img.naturalWidth) {
+            _preloadThumb(parseInt(id, 10) || 0, 0, id);
+          }
+        }
+      } catch (e) { }
+    }
+
+    function startThumbPolling() {
+      // 5s interval — fast enough to catch up quickly after reconnect
+      setInterval(loadThumbStrip, 5000);
+    }
+
+    // ── Latest capture crossfade ──────────────────────────────────────────────────
+    function updateLatestCapture(frameNum, attempt, frameId) {
+      attempt = attempt || 0;
+      const id = frameId || _fmtFrameId(frameNum);
+      const url = `/thumbs/${id}?r=${_runId}&t=${Date.now()}`;
+      const img = document.getElementById('latest-cap-img');
+      document.getElementById('latest-frame-label').textContent = `#${id}`;
+      const tmp = new Image();
+      tmp.onload = () => { img.src = tmp.src; };
+      tmp.onerror = () => {
+        if (attempt < 8) {
+          setTimeout(() => updateLatestCapture(frameNum, attempt + 1, frameId), 1000);
+        }
+      };
+      tmp.src = url;
+    }
+
+    // ── Camera trigger flash ──────────────────────────────────────────────────────
+    let _triggerFlashTimer = null;
+
+    function flashTriggerDot() {
+      const dot = document.getElementById('trigger-dot');
+      dot.style.opacity = '1';
+      dot.style.boxShadow = '0 0 8px var(--gold)';
+      clearTimeout(_triggerFlashTimer);
+      _triggerFlashTimer = setTimeout(() => {
+        dot.style.opacity = '0';
+        dot.style.boxShadow = 'none';
+      }, 600);
+    }
+
+    // ── Scrubber / hover playhead ─────────────────────────────────────────────────
+    let _scrubFrame = null;
+
+    function _frameIndexAtX(x, canvasWidth) {
+      if (!frames.length) return null;
+      const pad = 10;
+      const t = (x - pad) / (canvasWidth - 2 * pad);
+      const idx = Math.round(t * (frames.length - 1));
+      return Math.max(0, Math.min(frames.length - 1, idx));
+    }
+
+    // LABEL_W must match the CSS column for chart-label (110px)
+    const LABEL_W = 110;
+
+    function _showScrubberAt(clientX, chartsEl) {
+      if (!frames.length) return;
+
+      const ev = document.getElementById('c-ev');
+      if (!ev) return;
+      const rect = ev.getBoundingClientRect();
+
+      const pad = 10;
+      const dataW = rect.width;
+      const dataX = clientX - rect.left;
+
+      // Snap to nearest data index
+      const t = (dataX - pad) / Math.max(dataW - 2 * pad, 1);
+      const idx = Math.max(0, Math.min(frames.length - 1, Math.round(t * (frames.length - 1))));
+      if (!frames[idx]) return;
+
+      _scrubFrame = idx;
+      drawAll(); // Paint the hairline into all canvases
+      const f = frames[idx];
+      const fmtS = s => s >= 1 ? `${s.toFixed(2)}s` : `1/${Math.round(1 / s)}`;
+      const id = f.frame_id || _fmtFrameId(f.frame);
+
+      // Pixel-perfect line: always snaps to an actual data point position.
+      const lineX = pad + (idx / Math.max(frames.length - 1, 1)) * (dataW - 2 * pad);
+
+      // Tooltip
+      const tip = document.getElementById('scrubber-tip');
+      tip.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:flex-start;">
+      <img src="/thumbs/${id}?r=${_runId}&t=${Date.now()}"
+           style="width:80px;height:60px;object-fit:cover;border:1px solid var(--border-bright);flex-shrink:0;"
+           onerror="this.style.visibility='hidden'"/>
+      <div style="line-height:1.7;">
+        <span style="color:var(--text-dim)">Frame</span> <b style="color:var(--cyan)">${String(f.frame).padStart(4, '0')}</b><br>
+        <span style="color:var(--text-dim)">Phase</span> <b style="color:var(--gold)">${(f.hg_phase || '—').toUpperCase()}</b><br>
+        <span style="color:var(--text-dim)">EV   </span> <b style="color:var(--gold)">${f.hg_ev != null ? f.hg_ev.toFixed(2) : '—'}</b><br>
+        <span style="color:var(--text-dim)">Scene</span> <b style="color:var(--gold);opacity:0.7">${f.hg_ev_scene != null ? f.hg_ev_scene.toFixed(2) : '—'}</b><br>
+        <span style="color:var(--text-dim)">Sun  </span> <b style="color:var(--cyan)">${f.hg_sun_alt != null ? f.hg_sun_alt.toFixed(1) + '°' : '—'}</b><br>
+        <span style="color:var(--text-dim)">SS   </span> <b style="color:var(--green)">${fmtS(f.hg_shutter_s || 1 / 125)}</b><br>
+        <span style="color:var(--text-dim)">ISO  </span> <b style="color:var(--purple)">${f.hg_iso || '—'}</b><br>
+        <span style="color:var(--text-dim)">WB   </span> <b style="color:var(--teal)">${f.hg_kelvin || '—'}${f.hg_kelvin ? 'K' : ''}</b>
+        ${f.pos_s != null ? `<br><span style="color:var(--text-dim)">Sldr </span> <b style="color:#ff40c0">${f.pos_s.toFixed(1)}mm</b>` : ''}
+        ${f.pos_p != null ? `<br><span style="color:var(--text-dim)">Pan  </span> <b style="color:#ff40c0">${f.pos_p.toFixed(1)}°</b>` : ''}
+        ${f.pos_t != null ? `<br><span style="color:var(--text-dim)">Tilt </span> <b style="color:#ff40c0">${f.pos_t.toFixed(1)}°</b>` : ''}
+      </div>
+    </div>`;
+      const tipWidth = 270;
+      const tipLeft = lineX + 8;
+      // Adjust tooltip left to account for LABEL_W
+      const chartsW = chartsEl.clientWidth;
+      tip.style.left = (tipLeft + tipWidth > chartsW - LABEL_W ? lineX + LABEL_W - tipWidth - 8 : tipLeft + LABEL_W) + 'px';
+      tip.style.display = 'block';
+
+      if (!_seqPlaying) {
+        _preloadAround(idx);
+        seqGoTo(idx);
+      }
+    }
+
+    function _hideScrubber() {
+      _scrubFrame = null;
+      const sc = document.getElementById('scrubber-canvas');
+      if (sc) sc.getContext('2d').clearRect(0, 0, sc.width, sc.height);
+      document.getElementById('scrubber-tip').style.display = 'none';
+      // Restore latest capture
+      if (frames.length) { const lf = frames[frames.length - 1]; updateLatestCapture(lf.frame, 0, lf.frame_id); }
+      // Restore seq player to live/latest
+      if (_seqLive && frames.length) seqGoTo(frames.length - 1);
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const chartsEl = document.getElementById('charts');
+
+      // Attach to the #charts container so offsetX is always relative to the
+      // same coordinate origin as the scrubber-canvas overlay (left:0 of #charts).
+      // This works correctly on all screen sizes — no offsetLeft guesswork needed.
+      chartsEl.addEventListener('mousemove', e => {
+        if (!frames.length) return;
+        _showScrubberAt(e.clientX, chartsEl);
+      });
+      chartsEl.addEventListener('mouseleave', _hideScrubber);
+
+      // Touch support for mobile
+      chartsEl.addEventListener('touchmove', e => {
+        if (!frames.length) return;
+        e.preventDefault();
+        const touch = e.touches[0];
+        _showScrubberAt(touch.clientX, chartsEl);
+      }, { passive: false });
+      chartsEl.addEventListener('touchend', _hideScrubber);
+    });
+
+    // ── Frame ingest ──────────────────────────────────────────────────────────────
+    function _applyRunId(newRunId) {
+      // Called whenever the server tells us a run_id. If it changed, clear all
+      // cached thumbnails so images from the previous run don't bleed through.
+      if (newRunId && newRunId !== _runId) {
+        _runId = newRunId;
+        Object.keys(_imgCache).forEach(k => delete _imgCache[k]);
+        _knownThumbs.clear();
+      }
+    }
+
+    // True once we've received a history_replay via WS — suppresses the HTTP
+    // loadHistory() fallback so the two sources can't interleave.
+    let _historyLoaded = false;
+
+    function ingestFrame(d) {
+      // Sync run_id on init (WebSocket connect / reconnect)
+      if (d.type === 'init') {
+        _applyRunId(d.run_id);
+        return;   // init is metadata-only, not a plottable frame
+      }
+
+      // ── history_replay: server sends the full frame log right after init ──
+      // Always use this to rebuild frames so the array is in the correct order
+      // before any live status frames arrive.  Avoids the race where a live
+      // frame arrives before the HTTP loadHistory() fetch completes, which
+      // would push it to the front of the array and create graph jumps.
+      if (d.type === 'history_replay') {
+        _historyLoaded = true;
+        frames.length = 0;  // clear any frames that sneaked in before replay
+        for (const f of (d.frames || [])) {
+          if (f.frame !== undefined) {
+            if (f.frame_id !== undefined) f.frame_id = String(f.frame_id);
+            frames.push(f);
+          }
+        }
+        if (frames.length) {
+          _updateMotorRowVisibility();
+          drawAll();
+          for (const f of frames) _preloadThumb(f.frame, 0, f.frame_id);
+          document.getElementById('empty').style.display = 'none';
+          document.getElementById('hdrSub').textContent =
+            `Loaded ${frames.length} frames — live updates active`;
+          const last = frames[frames.length - 1];
+          if (last) updateLatestCapture(last.frame, 0, last.frame_id);
+          _seqIndex = Math.max(0, frames.length - 1);
+          seqGoTo(_seqIndex);
+          _preloadAllThumbs();
+        }
+        return;
+      }
+
+      if (d.type === 'graph_reset') {
+        _applyRunId(d.run_id);
+        frames.length = 0;
+        _seqIndex = 0;
+        _seqLive = true;
+        document.getElementById('seq-empty').style.display = 'block';
+        const c = document.getElementById('seq-canvas');
+        const ctx = c.getContext('2d');
+        ctx.clearRect(0, 0, c.width, c.height);
+        document.getElementById('empty').style.display = 'block';
+        drawAll();
+        return;
+      }
+
+      // Camera fired
+      if (d.type === 'shutter_event') {
+        flashTriggerDot();
+        return;
+      }
+
+      // Thumbnail became available for a frame that previously had none
+      // (e.g. Sony HTTP bulb where the JPEG postview was delayed)
+      if (d.type === 'thumb_ready' && d.frame_id !== undefined) {
+        const fid = String(d.frame_id);
+        // Bust the cached image so _preloadThumb fetches the newly-written file
+        delete _imgCache[fid];
+        // Find the matching frame record and force a re-preload + redraw
+        const rec = frames.find(f => (f.frame_id || _fmtFrameId(f.frame)) === fid);
+        if (rec) {
+          _preloadThumb(rec.frame, 0, fid);
+          updateLatestCapture(rec.frame, 0, fid);
+          drawAll();
+        }
+        return;
+      }
+
+      if (d.type !== 'status' || d.frame === undefined) return;
+
+      // Store the actual file frame_id if server sent it (avoids off-by-one with filenames)
+      if (d.frame_id !== undefined) d.frame_id = String(d.frame_id);
+      const isNew = !frames.length || frames[frames.length - 1].frame !== d.frame;
+      if (!isNew) {
+        frames[frames.length - 1] = d;
+      } else {
+        frames.push(d);
+        _preloadThumb(d.frame, 0, d.frame_id);
+        // Update latest capture panel
+        updateLatestCapture(d.frame, 0, d.frame_id);
+        // If live mode, advance seq player
+        if (_seqLive && !_scrubFrame) seqGoTo(frames.length - 1);
+      }
+
+      document.getElementById('empty').style.display = 'none';
+      _updateMotorRowVisibility();
+      updateStats(d);
+      drawAll();
+      // Kick off background preload for any thumbs we don't have yet
+      if (isNew) setTimeout(_preloadAllThumbs, 100);
+    }
+
+    // ── WebSocket ─────────────────────────────────────────────────────────────────// ── WebSocket ─────────────────────────────────────────────────────────────────
+    const WS_URL = `ws://${window.location.host}/ws-graph`;
+    let socket = null;
+
+    function connect() {
+      socket = new WebSocket(WS_URL);
+
+      socket.onopen = () => {
+        document.getElementById('liveDot').classList.add('live');
+        document.getElementById('hdrSub').textContent = 'Live — receiving frames';
+      };
+
+      socket.onmessage = (ev) => {
+        try { ingestFrame(JSON.parse(ev.data)); } catch (e) { }
+      };
+
+      socket.onclose = () => {
+        document.getElementById('liveDot').classList.remove('live');
+        document.getElementById('hdrSub').textContent = 'Reconnecting…';
+        setTimeout(connect, 2000);
+      };
+
+      socket.onerror = () => { };
+    }
+
+    // ── Load history on open ──────────────────────────────────────────────────────
+    // Fallback HTTP fetch — only used if the WS history_replay packet never
+    // arrived (e.g. very slow connection where the fetch beats the WS).
+    async function loadHistory() {
+      if (_historyLoaded) return;   // WS history_replay already handled it
+      try {
+        const res = await fetch('/api/session-history');
+        const data = await res.json();
+        if (_historyLoaded) return;  // replay arrived while fetch was in flight
+        frames.length = 0;           // start clean to avoid order issues
+        for (const f of (data.frames || [])) ingestFrame(f);
+        if (frames.length) {
+          document.getElementById('hdrSub').textContent =
+            `Loaded ${frames.length} frames — live updates active`;
+          _updateMotorRowVisibility();
+          drawAll();
+        }
+      } catch (e) {
+        console.warn('History load failed:', e);
+      }
+    }
+
+    // ── Init ──────────────────────────────────────────────────────────────────────
+    window.addEventListener('load', () => {
+      resizeAll();
+      // Connect first — the WS init+history_replay packets arrive before any
+      // live status frames, so the graph is populated in correct order.
+      connect();
+      // HTTP fallback: if history_replay hasn't arrived within 400 ms, fetch
+      // history over HTTP instead. Longer delay than before so WS replay has
+      // a comfortable window to win the race.
+      setTimeout(() => {
+        loadHistory().then(() => {
+          loadThumbStrip();          // populate _imgCache from server thumb-list
+          _preloadAllThumbs();       // cover any frames history loaded that thumb-list missed
+          startThumbPolling();       // 5s poll — retries any images still missing
+        });
+      }, 400);
+    });
+  </script>
+</body>
+
+</html>
