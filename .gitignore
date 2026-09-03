@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# macOS
+.DS_Store
+._*
+
+# Built apps / bundles
+*.app/
+build/
+dist/
+
+# Separate project, vendored here by accident
+halftone_splat/
+
+# Local test media and scratch output
+night thumbs/
+clip_*.json
+*.jpg
+*.jpeg
+*.png
+
+# Local tool state
+.claude/
+settings.local.json

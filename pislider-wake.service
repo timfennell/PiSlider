@@ -1,0 +1,21 @@
+[Unit]
+Description=PiSlider Wake-on-Demand Trigger
+Documentation=man:systemd.service(5)
+After=network.target
+# Automatically stopped when pislider.service starts (they can't both hold port 8000)
+Conflicts=pislider.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/tim/Projects/pislider
+ExecStart=/usr/bin/python3 /home/tim/Projects/pislider/pislider_wake.py
+# Does not restart — pislider.service's ExecStopPost re-arms this
+Restart=no
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pislider-wake
+
+[Install]
+WantedBy=multi-user.target

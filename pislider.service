@@ -1,0 +1,33 @@
+[Unit]
+Description=PiSlider Motion Control Server
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/tim/Projects/pislider
+ExecStart=/bin/bash /home/tim/Projects/pislider/run.sh
+Restart=always
+RestartSec=5
+
+# Give the app time to clean up GPIO on stop before systemd kills it
+TimeoutStopSec=15
+KillSignal=SIGTERM
+
+# When the full app stops (normal stop, restart, or crash-restart gives up),
+# re-arm the wake trigger so the next browser visit starts everything again.
+# Note: Restart=always means crashes auto-restart without reaching here;
+# this fires on a manual  systemctl stop pislider  or clean shutdown.
+ExecStopPost=/bin/systemctl start pislider-wake.service
+
+# Capture all output to the systemd journal (viewable with journalctl)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pislider
+
+# Raise open file limit — needed for multiple camera streams + WebSocket clients
+LimitNOFILE=65536
+
+# Note: no [Install] WantedBy — pislider is started on-demand by
+# pislider-wake.service, not automatically at boot.

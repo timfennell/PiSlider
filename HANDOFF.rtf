@@ -1,0 +1,304 @@
+{\rtf1\ansi\deff0
+{\fonttbl
+  {\f0\froman\fcharset0 Georgia;}
+  {\f1\fswiss\fcharset0 Helvetica;}
+  {\f2\fmodern\fcharset0 Courier New;}
+}
+{\colortbl;
+  \red0\green0\blue0;
+  \red30\green30\blue30;
+  \red0\green100\blue0;
+  \red140\green0\blue0;
+  \red80\green80\blue80;
+  \red0\green60\blue120;
+}
+\widowctrl\hyphauto
+\margl1440\margr1440\margt1440\margb1440
+
+{\f1\fs36\b\cf2 PiSlider \emdash  Agent Handoff Document\par}
+{\f1\fs20\cf5 Last updated: May 2026  |  Primary author: Tim Fennell  |  Compiled for agent continuity\par}
+\par
+
+{\f1\fs28\b\cf6 1.  What This Project Is\par}
+\par
+{\f0\fs22 PiSlider is a fully custom camera motion-control rig built around a Raspberry Pi 5. It drives a 3-axis camera slider (linear rail, pan head, tilt head) using TMC2209 stepper motor drivers. Tim built every layer himself: the mechanical frame, the wiring harness, the Python backend, and the web-based control UI. The system is operated headlessly \emdash  the Pi runs a persistent FastAPI/asyncio server, and Tim controls it from his phone or tablet over Wi-Fi using a dark-mode single-page web app.\par}
+\par
+{\f0\fs22 The rig supports four distinct shooting modes:\par}
+\par
+{\f1\fs22\b Timelapse (move-shoot-move)} \emdash  {\f0\fs22 The workhorse mode. The rig steps to each position, fires the camera shutter, waits for the exposure, then moves again. A sophisticated Holy Grail exposure brain (}{\f2\fs20 holygrail.py}{\f0\fs22 ) automatically adjusts shutter speed, ISO, and aperture across day-to-night transitions using a 3-layer system: an astro/atmospheric model as the baseline, a DNG raw tracker for measured corrections, and a dynamic blend between them. This prevents the sudden jumps that ruin long Holy Grail timelapses.\par}
+\par
+{\f1\fs22\b Cinematic (live video)} \emdash  {\f0\fs22 The rig moves continuously while the camera records video. Tim controls it in real time with an 8BitDo Pro 2 gamepad. The motion system uses an InertiaEngine (50 Hz physics loop) that gives the axes momentum and damping so moves look organic rather than mechanical. There is also an ArcTan subject tracker: given two physical calibration points, the system can solve the 3D geometry and auto-pan to keep a subject centred as the slider moves. Keyframe-based programmed moves can be recorded, saved to a library, and replayed with precise easing curves.\par}
+\par
+{\f1\fs22\b Macro (focus stacking / 3D scanning)} \emdash  {\f0\fs22 The slider and rotation stage step through a grid of positions for product photography, stacking, and 360-degree scanning. Supports multi-slot lighting and structured-light patterns.\par}
+\par
+{\f1\fs22\b Retime pipeline (post-production, Mac)} \emdash  {\f0\fs22 A separate tool that runs on Tim\rquote s Mac (not the Pi). When the same programmed move is recorded multiple times (e.g. plate pass, beauty pass, FX pass), this pipeline reads the MOTION.json sidecar from each recording and produces a DaVinci Resolve-importable FCP7 XML timeline. Speed keyframes in the XML encode the phase-matching retime curves so Resolve can apply Optical Flow and render perfectly synchronised layers without any manual trimming.\par}
+\par
+
+{\f1\fs28\b\cf6 2.  Physical Hardware Setup\par}
+\par
+{\f1\fs24\b\cf3 2.1 The Rig\par}
+\par
+{\f0\fs22 \'95  Linear rail slider, approximately 60 cm travel, driven by stepper motor via belt drive\par
+\'95  Pan axis: motorised fluid head rotation\par
+\'95  Tilt axis: motorised tilt (used less often; also used for tilt keystoning correction in retime)\par
+\'95  Raspberry Pi 5 mounted on the rig body, powered from a USB-C battery bank for field use\par
+\'95  Sony mirrorless camera connected over USB-C (Sony Imaging Edge protocol) and via a 2.5 mm shutter cable to GPIO\par
+\'95  PiCamera (RPi camera module) also supported for testing without the Sony\par}
+\par
+{\f1\fs24\b\cf3 2.2 Electronics\par}
+\par
+{\f0\fs22 \'95  Three TMC2209 stepper driver boards, addressed over single-wire UART (addresses 0=Tilt, 1=Pan, 2=Slider)\par
+\'95  Two motion modes:\par
+\tab \emdash  {\f2\fs20 VACTUAL} register (UART velocity control): used in Cinematic mode for smooth continuous motion\par
+\tab \emdash  Bresenham pulse stepping via GPIO: used in Timelapse mode for precise step counts\par
+\'95  GPIO pin 8: camera shutter trigger\par
+\'95  GPIO pins for two relays: ring light and laser pointer (used for macro positioning)\par
+\'95  GPIO 27: Hall-effect sensor for homing / soft-limit calibration\par
+\'95  GPIO 9: endstop (shared with UART RX \emdash  a deliberate design compromise to save a GPIO pin)\par
+\'95  NeoPixel status LED strip (7 LEDs) \emdash  currently disconnected pending Pi 5 rewiring\par
+\'95  8BitDo Pro 2 Bluetooth gamepad for live cinematic control (read via }{\f2\fs20 evdev}{\f0\fs22  in }{\f2\fs20 gamepad.py}{\f0\fs22 )\par}
+\par
+{\f1\fs24\b\cf3 2.3 Why These Choices Were Made\par}
+\par
+{\f0\fs22 \'95  {\b TMC2209 over simpler drivers}: StealthChop mode makes the motors near-silent, essential for cinematic video recording. The UART addressing also means fewer GPIO pins are needed for three axes.\par
+\'95  {\b Single-wire UART}: All three drivers share one UART wire with different addresses. This is a standard TMC feature but required careful configuration of the }{\f2\fs20 hardware.py}{\f0\fs22  initialisation sequence. Endstop sharing GPIO 9 with UART RX is a known constraint \emdash  the endstop is read by polling between UART transactions.\par
+\'95  {\b Asyncio throughout}: The entire backend is a single asyncio event loop. This avoids threading complexity with the UART bus and lets WebSocket events, motor control, and camera communication all coexist without locks in most cases.\par
+\'95  {\b FastAPI + WebSocket over REST}: Real-time position feedback and live telemetry to the phone UI require push messages. A REST polling model would add too much latency for live cinematic control.\par
+\'95  {\b Vanilla JS frontend}: No build tools, no bundler, no framework. Runs directly from the Pi\rquote s file system served by FastAPI. This is intentional \emdash  it avoids NPM dependency hell on an embedded system and means the code is easy to inspect and edit anywhere.\par}
+\par
+
+{\f1\fs28\b\cf6 3.  Codebase Overview\par}
+\par
+{\f1\fs24\b\cf3 Key Files\par}
+\par
+{\f2\fs20 app.py}{\f0\fs22  (8 200+ lines) \emdash  The monolith. FastAPI app, WebSocket handler, all shooting mode orchestration, camera control (Sony USB + PiCamera), sidecar writing, state persistence. Almost every feature routes through here. Refactoring into sub-modules has been discussed but not done; the single-file approach makes it easy to grep the full state machine.\par}
+\par
+{\f2\fs20 cinematic_engine.py}{\f0\fs22  (1 600+ lines) \emdash  Everything specific to cinematic mode: SoftLimitGuard (soft-limit enforcement with deceleration ramps), InertiaEngine (50 Hz physics with per-axis tunable inertia/damping), ArcTanTracker (3D least-squares geometry solver for subject tracking), ProgrammedMove (keyframe trajectory management, Catmull-Rom spline path, per-segment easing), MoveLibrary (save/load named moves to JSON).\par}
+\par
+{\f2\fs20 motion_engine.py}{\f0\fs22  \emdash  Timelapse motion: cubic spline trajectory generator, easing curves (cycloid, sinusoidal, gaussian, linear), Bresenham step sequencer.\par}
+\par
+{\f2\fs20 distributions.py}{\f0\fs22  \emdash  Statistical easing distributions. Provides the mathematical basis for some of the more exotic easing curves (cycloid/brachistochrone profile).\par}
+\par
+{\f2\fs20 holygrail.py}{\f0\fs22  \emdash  Holy Grail auto-exposure brain. Three-layer system: astro model (sun altitude 薔  target EV), DNG tracker (measures actual exposure from raw files), dynamic blend. Reads XMP sidecars, writes exposure adjustments, drives the anchor meter-shot system.\par}
+\par
+{\f2\fs20 hardware.py}{\f0\fs22  \emdash  Low-level TMC2209 UART driver, GPIO shutter trigger, relay control, Hall sensor, endstop. Contains the Bresenham stepper and VACTUAL velocity control implementations.\par}
+\par
+{\f2\fs20 macro_engine.py}{\f0\fs22  \emdash  Focus stacking and 3D scanning orchestration.\par}
+\par
+{\f2\fs20 gamepad.py}{\f0\fs22  \emdash  Async evdev reader for 8BitDo Pro 2. Maps physical buttons/sticks to cinematic commands via WebSocket.\par}
+\par
+{\f2\fs20 retime.py}{\f0\fs22  \emdash  Post-production retime pipeline (runs on Mac). Phase-matching via CubicSpline, speed keyframe generation, FCP7 XML output, tilt keystoning correction.\par}
+\par
+{\f2\fs20 retime_server.py}{\f0\fs22  \emdash  Flask server for the retime UI. Serves the browser panel, exposes /validate, /generate (SSE stream), /browse (native folder picker), /reveal endpoints.\par}
+\par
+{\f2\fs20 retime_plugin/index.html}{\f0\fs22  \emdash  Browser UI for the retime pipeline.\par}
+\par
+{\f2\fs20 PiSlider Retime.app/}{\f0\fs22  \emdash  macOS .app bundle (shell script wrapper). Double-click to launch the retime server and open the browser UI. Does not bundle Python \emdash  it runs the project folder\rquote s Python files directly so updates are automatic.\par}
+\par
+{\f2\fs20 web/index.html}{\f0\fs22 , {\f2\fs20 web/main.js}{\f0\fs22 , {\f2\fs20 web/style.css}{\f0\fs22  \emdash  The Pi\rquote s control UI.\par}
+\par
+
+{\f1\fs28\b\cf6 4.  The MOTION.json Sidecar System\par}
+\par
+{\f0\fs22 Every recording writes a }{\f2\fs20 MOTION.json}{\f0\fs22  file alongside the image or video frames. This is the backbone of the retime pipeline. A sidecar looks like this:\par}
+\par
+{\f2\fs20\cf4
+\{
+  "run_id": "abc123",
+  "mode": "cinematic",
+  "camera": "sony",
+  "camera_fps": 60,
+  "duration_s": 12.4,
+  "easing": "cycloid",
+  "focal_mm": 35.0,
+  "reversed": false,
+  "frames": [
+    \{"frame_idx": 0, "phase": 0.0, "real_time_s": 0.0,
+     "pos_s": 0.0, "pos_p": 0.0, "pos_t": 2.1\},
+    ...
+  ]
+\}
+\par}
+\par
+{\f0\fs22 \'95  {\f2\fs20 phase} (0.0 薔  1.0): position in the programmed easing curve. This is the canonical matching key. Two frames with the same phase have the same relative position in the move \emdash  regardless of speed differences between passes.\par
+\'95  {\f2\fs20 pos_s / pos_p / pos_t}: actual physical positions in mm / degrees. Used for tilt keystoning correction.\par
+\'95  {\f2\fs20 focal_mm}: lens focal length from Sony EXIF. Used to auto-compute tilt correction factor (35 / focal_mm).\par
+\'95  {\f2\fs20 reversed}: set to true when the programmed move was reversed before recording. The retime pipeline flips the source-frame mapping to produce negative speed keyframes (reverse playback in Resolve).\par}
+\par
+
+{\f1\fs28\b\cf6 5.  The Retime Pipeline in Detail\par}
+\par
+{\f1\fs24\b\cf3 5.1 Why It Exists\par}
+\par
+{\f0\fs22 The core use case: shoot the same move multiple times (different lenses, different light, different subjects) and composite all the clips together in DaVinci Resolve. Because each recording takes a different amount of real time (camera operator hesitation, mechanical variation, different duration settings), the clips are not in sync. The MOTION.json sidecar lets us re-map each clip to match the plate\rquote s exact motion phase.\par}
+\par
+{\f1\fs24\b\cf3 5.2 How Phase Matching Works\par}
+\par
+{\f0\fs22 For each output frame N of the plate:\par
+  1. Look up }{\f2\fs20 phase_plate[N]\par}
+{\f0\fs22   2. Build a CubicSpline mapping }{\f2\fs20 clip_phases 薔  clip_frame_indices\par}
+{\f0\fs22   3. Evaluate the spline at }{\f2\fs20 phase_plate[N]}{\f0\fs22  to get a fractional source frame\par
+  4. That fractional index becomes a speed keyframe in the FCP7 XML\par}
+\par
+{\f0\fs22 The result is a set of speed keyframes that tell Resolve exactly how fast to play each clip at each moment so it stays in phase with the plate. Resolve\rquote s Optical Flow then handles interpolation between frames for smooth slow-motion or speed ramps.\par}
+\par
+{\f1\fs24\b\cf3 5.3 Reversed Clips\par}
+\par
+{\f0\fs22 A clip recorded with a reversed move (slider goes end薔 start) can be matched to a forward plate by flipping the source frame indices in the retime map. The resulting speed keyframes are negative, which tells Resolve to play the clip backward. This allows a technique where you shoot the reversed move, then composite with forward reverse playback to get clean motion matching for shots like product reveals or camera pull-back effects.\par}
+\par
+{\f1\fs24\b\cf3 5.4 Tilt Keystoning Correction\par}
+\par
+{\f0\fs22 When the tilt axis is non-zero, the camera is pitched relative to the slider. As the slider moves horizontally, a pitched camera introduces a keystoning distortion: the subject appears to drift vertically. The correction factor is:\par}
+\par
+{\f2\fs20\cf4   pitch = sin(radians(pos_t)) * tilt_factor\par
+  tilt_factor = 35.0 / focal_mm   (auto, or user-specified)\par}
+\par
+{\f0\fs22 The correction is written as a CSV per frame alongside the retimed output. This is currently a data output (the actual warp would be applied in compositing). An OpenCV-based pixel-shift bake was discussed but not implemented.\par}
+\par
+
+{\f1\fs28\b\cf6 6.  DaVinci Resolve Integration: What We Tried and Why\par}
+\par
+{\f0\fs22 This was a significant troubleshooting saga. The goal was to get retime results directly into a Resolve timeline without manual work. We tried three approaches:\par}
+\par
+{\f1\fs22\b Attempt 1 \emdash  Workflow Integration Plugin (Electron app)\par}
+\par
+{\f0\fs22 DaVinci Resolve has a \ldblquote Workflow Integrations\rdblquote  system that loads Electron apps as side panels inside Resolve. We built a full plugin with }{\f2\fs20 manifest.xml}{\f0\fs22 , }{\f2\fs20 main.js}{\f0\fs22 , and a Flask Python server. The plugin would start the server automatically when loaded.\par}
+\par
+{\f0\fs22 Problem: Workflow Integrations require DaVinci Resolve Studio (the paid version, ~$300). Tim has the free version. The install paths we tried:\par
+  \'95  }{\f2\fs20 ~/Library/Application Support/Blackmagic Design/DaVinci Resolve/Workflow Integration Plugins/}{\f0\fs22  (user)\par
+  \'95  }{\f2\fs20 /Library/Application Support/Blackmagic Design/DaVinci Resolve/Workflow Integration Plugins/}{\f0\fs22  (system, with sudo)\par}
+\par
+{\f0\fs22 Neither produced a Workflow Integrations menu item in Resolve. Confirmed the feature is gated to Studio.\par}
+\par
+{\f1\fs22\b Attempt 2 \emdash  UIManager Python Scripts\par}
+\par
+{\f0\fs22 Resolve\rquote s Fusion scripting environment exposes }{\f2\fs20 fusion.UIManager}{\f0\fs22  (a Qt-based UI toolkit) and a Scripts menu (Workspace 薔  Scripts). We wrote a full Python UI panel (}{\f2\fs20 PiSlider_Retime_UI.py}{\f0\fs22 ) that uses UIManager windows, starts the Flask server as a subprocess, and streams SSE log output into a TextEdit widget. The script was installed to:\par
+  \'95  }{\f2\fs20 ~/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Edit/\par}
+\par
+{\f0\fs22 The script never appeared in the Scripts menu, even after multiple Resolve restarts, trying system paths, and creating a minimal test.py. We also found:\par
+  \'95  }{\f2\fs20 scriptapp("Resolve")}{\f0\fs22  returns }{\f2\fs20 None}{\f0\fs22  in free Resolve even with Resolve running\par
+  \'95  Resolve 20 free does not expose the \ldblquote External scripting using\rdblquote  preference shown in older tutorials\par
+  \'95  External scripting and the Scripts menu appear to be disabled or unreliable in the free version\par}
+\par
+{\f1\fs22\b Attempt 3 \emdash  Standalone App + FCP7 XML Import (current approach)\par}
+\par
+{\f0\fs22 We abandoned direct Resolve integration and instead generate a standard FCP7 XML file that Resolve imports natively (File 薔  Import Timeline). This is the approach that works with the free version and requires no plugins.\par}
+\par
+{\f0\fs22 The XML uses the }{\f2\fs20 timeremap}{\f0\fs22  filter effect with per-frame speed keyframes and }{\f2\fs20 variablespeed=1}{\f0\fs22  set. Each clip gets its own video track. After import, the user selects each retimed clip and sets Inspector 薔  Retime and Scaling 薔  Retime Process 薔  Optical Flow, then renders.\par}
+\par
+{\f0\fs22 This is actually a cleaner workflow because:\par
+  \'95  Works with free Resolve\par
+  \'95  No proprietary plugin dependencies\par
+  \'95  The XML is a standard format, editable in a text editor if needed\par
+  \'95  Optical Flow is applied in Resolve\rquote s render pipeline, which is GPU-accelerated\par}
+\par
+
+{\f1\fs28\b\cf6 7.  Holy Grail Timelapse: Key Design Decisions\par}
+\par
+{\f0\fs22 The Holy Grail (HG) exposure brain in }{\f2\fs20 holygrail.py}{\f0\fs22  is one of the most complex parts of the project. Key decisions:\par}
+\par
+{\f0\fs22 \'95  {\b Three-layer blend}: Pure model-based systems drift with weather/clouds. Pure measurement-based systems react too slowly or over-correct. The blend gives stability with adaptability.\par
+\'95  {\b Anchor meter shots}: Every N frames the shutter fires a \ldblquote meter shot\rdblquote  (shorter exposure) that is immediately read back as a DNG and analysed for actual brightness. This closes the control loop without relying on the camera\rquote s own metering.\par
+\'95  {\b Kelvin temperature tracking}: Colour temperature is tracked through the transition (tungsten warm artificial light vs. blue sky) to prepare for colour grading.\par
+\'95  {\b XMP sidecar output}: Exposure adjustments are written as Lightroom-compatible XMP files so the entire sequence can be batch-processed in LRTimelapse without manual keyframing.\par}
+\par
+
+{\f1\fs28\b\cf6 8.  Cinematic Engine: Key Design Decisions\par}
+\par
+{\f1\fs24\b\cf3 SoftLimitGuard\par}
+{\f0\fs22 The motors can physically run off the ends of the rails. The SoftLimitGuard enforces deceleration zones near the limits, computed from current velocity and a configurable deceleration constant. It was carefully tuned to not zero out velocity prematurely when keyframe targets sit exactly at the boundary \emdash  this required a bypass flag for programmed moves since their endpoints are always valid.\par}
+\par
+{\f1\fs24\b\cf3 InertiaEngine\par}
+{\f0\fs22 Raw joystick input is passed through a velocity integrator with per-axis inertia (acceleration lag) and damping (natural deceleration when stick is released). This makes cinematic moves look physically plausible even with aggressive stick input. The 50 Hz update rate matches the motor VACTUAL update rate.\par}
+\par
+{\f1\fs24\b\cf3 ArcTanTracker\par}
+{\f0\fs22 To keep a subject centred as the slider moves, the system needs to know the 3D geometry of the setup. The user physically positions the rig at two known points and presses \ldblquote calibrate\rdblquote ; the tracker solves the arc-tangent equations to find the subject\rquote s position in space. It then continuously updates the pan angle as the slider moves. This works well for subjects that don\rquote t move (products, architecture) but is not a live tracking system.\par}
+\par
+{\f1\fs24\b\cf3 Easing Curves\par}
+{\f0\fs22 The cycloid (brachistochrone) profile was chosen as the default easing because it is the physically natural acceleration curve for a mass on a rail \emdash  it feels more organic than sinusoidal, which has an abrupt start, or linear, which has abrupt start and end. Users can also choose gaussian, sinusoidal, and others per-segment.\par}
+\par
+{\f1\fs24\b\cf3 Reverse Move Feature (just added)\par}
+{\f0\fs22 The }{\f2\fs20 虘  Reverse}{\f0\fs22  button in the cinematic panel flips the keyframe order so the rig physically travels from the end position to the start position during recording. The sidecar records }{\f2\fs20 "reversed": true}{\f0\fs22 , and the retime pipeline automatically produces negative speed keyframes, causing Resolve to play the clip backward. When played in reverse the motion matches the forward-moving plate. The button turns yellow when active so the operator always knows the move direction before rolling camera.\par}
+\par
+
+{\f1\fs28\b\cf6 9.  Current State and What Still Needs Work\par}
+\par
+{\f1\fs24\b\cf3 Recently Completed\par}
+{\f0\fs22 \'95  Added }{\f2\fs20 focal_mm}{\f0\fs22  to cinema sidecars (was only in timelapse sidecars)\par
+\'95  Tilt keystoning correction computation and CSV output in retime pipeline\par
+\'95  Complete retime pipeline with FCP7 XML generation and speed keyframes\par
+\'95  Standalone retime app: Flask server + browser UI + macOS .app bundle\par
+\'95  Native macOS folder picker (via osascript) in the retime UI \emdash  browse buttons on all path inputs\par
+\'95  Reverse move feature: button, sidecar flag, and automatic retime handling\par}
+\par
+{\f1\fs24\b\cf3 Known Issues / Outstanding Work\par}
+{\f0\fs22 \'95  {\b NeoPixel strip}: Disconnected and currently unused pending a Pi 5 rewiring session. Code exists in }{\f2\fs20 neopixel_status.py}{\f0\fs22  but the LED calls are commented out in }{\f2\fs20 app.py}{\f0\fs22 .\par
+\'95  {\b Tilt correction pixel bake}: The }{\f2\fs20 write_tilt_sidecar()}{\f0\fs22  function writes a per-frame correction CSV. An OpenCV-based pixel shift / warp to bake the correction directly into the image frames was discussed but not implemented.\par
+\'95  {\b retime_from_timeline()}: The old Resolve-API-based retime function still exists in }{\f2\fs20 retime.py}{\f0\fs22  for reference. It is not reachable from the current UI but could be useful if Studio is obtained in future.\par
+\'95  {\b app.py size}: At 8 200+ lines, }{\f2\fs20 app.py}{\f0\fs22  is unwieldy. Some natural split points would be: camera control, sidecar writing, HG integration, WebSocket dispatch. Tim has opted to keep it monolithic for now for ease of grep and debugging in the field.\par
+\'95  {\b Sync to Pi}: All code edits are made on Tim\rquote s Mac. The working copy needs to be rsync\rquote d or scp\rquote d to the Pi before testing. There is no CI or automated deploy \emdash  it is a manual }{\f2\fs20 scp -r . pi@pislider.local:~/slider/}{\f0\fs22  step.\par
+\'95  {\b Retime not yet tested end-to-end}: The full pipeline (record plate + clip on Pi 薔  retime on Mac 薔  import XML into Resolve 薔  Optical Flow render) has not yet been run with real footage. All components have been syntax-checked and the logic has been manually traced.\par}
+\par
+
+{\f1\fs28\b\cf6 10.  How to Deploy to the Pi\par}
+\par
+{\f2\fs22 # From the project folder on the Mac:\par
+scp -r . pi@pislider.local:~/slider/\par
+\par
+# Or targeted:\par
+scp app.py cinematic_engine.py pi@pislider.local:~/slider/\par
+\par
+# Restart the service on the Pi:\par
+ssh pi@pislider.local "sudo systemctl restart pislider"\par}
+\par
+{\f0\fs22 The service file is }{\f2\fs20 pislider.service}{\f0\fs22 . There is also }{\f2\fs20 pislider-wake.service}{\f0\fs22  which handles the Pi\rquote s USB wake behaviour.\par}
+\par
+
+{\f1\fs28\b\cf6 11.  How to Run the Retime App (Mac only)\par}
+\par
+{\f0\fs22 Double-click }{\f2\fs20 PiSlider Retime.app}{\f0\fs22  in the project folder. On first launch, right-click 薔  Open to bypass Gatekeeper (it is not code-signed).\par}
+\par
+{\f0\fs22 Or from Terminal:\par}
+{\f2\fs22   cd /Users/timothyfennell/Documents/slider\\ claud\\ code\par
+  python3 retime_server.py\par}
+\par
+{\f0\fs22 Required Python packages (Mac): }{\f2\fs20 flask flask-cors scipy numpy}{\f0\fs22 . The app opens at }{\f2\fs20 http://localhost:9077}{\f0\fs22 .\par}
+\par
+{\f0\fs22 Workflow after generating the XML:\par
+  1. Open DaVinci Resolve (free version is fine)\par
+  2. File 薔  Import Timeline 薔  select the }{\f2\fs20 .xml}{\f0\fs22  file\par
+  3. Select each retimed clip (tracks 2+)\par
+  4. Inspector 薔  Retime and Scaling 薔  Retime Process 薔  Optical Flow\par
+  5. Render\par}
+\par
+
+{\f1\fs28\b\cf6 12.  Tim\rquote s Working Style Notes\par}
+\par
+{\f0\fs22 \'95  Tim is highly technical across the full stack and does not need concepts explained. He appreciates concise, direct answers.\par
+\'95  He often has the full context of why something was built a certain way and will push back if a suggestion conflicts with a constraint that isn\rquote t obvious from the code alone. Ask if unsure rather than assuming.\par
+\'95  The project is a passion project. Correctness and elegance matter. He is willing to take time to do things right.\par
+\'95  The retime pipeline was initially conceived around CSV files and image copying; Tim clarified that the data already lives in JSON and that Resolve should do the heavy interpolation work, leading to the speed-keyframe FCP7 XML approach. Always check whether existing data structures already cover a need before proposing new ones.\par
+\'95  When a path is blocked (e.g. Resolve Studio required, Scripts menu not working), Tim will ask \ldblquote is there another way?\rdblquote  and expects a real alternative, not a workaround that has the same root problem.\par
+\'95  Tim prefers code with minimal comments \emdash  only add a comment when the WHY is non-obvious.\par}
+\par
+
+{\f1\fs28\b\cf6 13.  Quick Reference: Important Constants and Paths\par}
+\par
+{\f2\fs22 Project folder (Mac):  ~/Documents/slider claud code/\par
+Pi hostname:            pislider.local\par
+Pi project root:        ~/slider/\par
+Retime server port:     9077\par
+Session state file:     ~/.pislider_session.json  (on Pi)\par
+Saved moves library:    ~/.pislider_moves.json    (on Pi)\par
+TMC2209 UART addrs:     0=Tilt  1=Pan  2=Slider\par
+Shutter GPIO:           8\par
+Hall sensor GPIO:       27\par
+Endstop GPIO:           9\par
+Relay 1 (ring light):   (see hardware.py)\par
+Relay 2 (laser):        (see hardware.py)\par
+Default tilt factor:    35.0 / focal_mm\par
+Retime keyframe step:   every 3 output frames (configurable in _speed_keyframes())\par}
+\par
+\par
+{\f1\fs18\cf5 End of handoff document. Generated May 2026.\par}
+}

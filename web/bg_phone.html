@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="mobile-web-app-capable" content="yes">
+<title>BG Matte</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+  }
+  #bg {
+    position: fixed; inset: 0;
+    background: #000000;
+    transition: background-color 0.05s ease;
+  }
+  #hud {
+    position: fixed;
+    top: env(safe-area-inset-top, 12px);
+    right: 14px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    opacity: 0;
+    transition: opacity 0.5s;
+    z-index: 10;
+    pointer-events: none;
+  }
+  #hud.visible { opacity: 1; pointer-events: auto; }
+  .dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: #444;
+  }
+  .dot.green  { background: #4caf50; }
+  .dot.yellow { background: #ffb300; }
+  .dot.red    { background: #f44336; }
+  #color-label {
+    font: 600 11px/1 -apple-system, sans-serif;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: #888;
+    mix-blend-mode: difference;
+  }
+
+  /* Controls panel — appears on tap, auto-hides */
+  #panel {
+    position: fixed;
+    bottom: env(safe-area-inset-bottom, 20px);
+    left: 50%; transform: translateX(-50%);
+    background: rgba(20,20,20,0.85);
+    backdrop-filter: blur(10px);
+    border-radius: 16px;
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 260px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s;
+    z-index: 20;
+    color: #fff;
+    font: 13px/1.4 -apple-system, sans-serif;
+  }
+  #panel.visible { opacity: 1; pointer-events: auto; }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .row label { flex: 0 0 90px; color: #aaa; font-size: 12px; }
+  input[type=range] {
+    flex: 1;
+    -webkit-appearance: none;
+    height: 4px;
+    border-radius: 2px;
+    background: #555;
+    outline: none;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    background: #fff;
+    cursor: pointer;
+  }
+  .val { flex: 0 0 48px; text-align: right; font-variant-numeric: tabular-nums; font-size: 12px; color: #ccc; }
+  .btn-row { display: flex; gap: 8px; justify-content: center; margin-top: 4px; }
+  .btn {
+    padding: 8px 20px;
+    border: none;
+    border-radius: 10px;
+    font: 600 13px -apple-system, sans-serif;
+    cursor: pointer;
+    flex: 1;
+  }
+  .btn-black { background: #111; color: #888; border: 1px solid #333; }
+  .btn-grey  { background: #808080; color: #fff; }
+  .btn-white { background: #eee; color: #333; }
+  .btn-fs    { background: #1a78c2; color: #fff; }
+
+  #ct-swatch {
+    width: 24px; height: 24px;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.15);
+    flex-shrink: 0;
+  }
+</style>
+</head>
+<body>
+
+<div id="bg"></div>
+
+<div id="hud">
+  <div class="dot" id="ws-dot" title="WebSocket"></div>
+  <span id="color-label">BLACK</span>
+</div>
+
+<div id="panel">
+  <div class="row">
+    <label>White CT</label>
+    <input type="range" id="ct-slider" min="2700" max="9000" step="100" value="5500">
+    <span class="val" id="ct-val">5500K</span>
+    <div id="ct-swatch"></div>
+  </div>
+  <div class="row">
+    <label>Brightness</label>
+    <input type="range" id="br-slider" min="20" max="100" step="1" value="100">
+    <span class="val" id="br-val">100%</span>
+  </div>
+  <div class="btn-row">
+    <button class="btn btn-black" id="manual-black" onclick="setColor('black')">Black</button>
+    <button class="btn btn-grey"  id="manual-grey"  onclick="setColor('grey')">Grey</button>
+    <button class="btn btn-white" id="manual-white" onclick="setColor('white')">White</button>
+    <button class="btn btn-fs" onclick="requestFS()">⛶ Full</button>
+  </div>
+  <div style="text-align:center;font-size:11px;color:#555;margin-top:2px;">Tap screen to hide panel</div>
+</div>
+
+<script>
+// ── State ───────────────────────────────────────────────────────────────────
+let currentColor = 'black';
+let currentKelvin = 5500;
+let brightness = 100;   // 0-100 scale for the white level
+let ws = null;
+let wakeLock = null;
+let panelTimer = null;
+let panelVisible = false;
+
+// ── Kelvin → RGB (Tanner Helland / Charity approximation) ───────────────────
+function kelvinToRGB(k) {
+  const t = k / 100;
+  let r, g, b;
+  if (t <= 66) {
+    r = 255;
+    g = Math.max(0, Math.min(255, 99.4708025861 * Math.log(t) - 161.1195681661));
+    b = t <= 19 ? 0 : Math.max(0, Math.min(255, 138.5177312231 * Math.log(t - 10) - 305.0447927307));
+  } else {
+    r = Math.max(0, Math.min(255, 329.698727446 * Math.pow(t - 60, -0.1332047592)));
+    g = Math.max(0, Math.min(255, 288.1221695283 * Math.pow(t - 60, -0.0755148492)));
+    b = 255;
+  }
+  r = Math.round(r); g = Math.round(g); b = Math.round(b);
+  return { r, g, b, css: `rgb(${r},${g},${b})` };
+}
+
+function applyBrightness({ r, g, b }) {
+  const f = brightness / 100;
+  return `rgb(${Math.round(r*f)},${Math.round(g*f)},${Math.round(b*f)})`;
+}
+
+// ── Background update ────────────────────────────────────────────────────────
+function setColor(color, kelvin, settleMs, cmdBrightness) {
+  currentColor = color;
+  if (kelvin !== undefined) currentKelvin = kelvin;
+  // For grey: use commanded brightness; for white: full brightness; black: irrelevant
+  if (color === 'white') {
+    brightness = 100;
+    document.getElementById('br-slider').value = 100;
+    document.getElementById('br-val').textContent = '100%';
+  } else if (color === 'grey') {
+    if (cmdBrightness !== undefined) {
+      brightness = cmdBrightness;
+    } else if (brightness >= 95) {
+      brightness = 50;   // snap to mid-grey on first manual tap
+    }
+    document.getElementById('br-slider').value = brightness;
+    document.getElementById('br-val').textContent = `${brightness}%`;
+  }
+  const bg = document.getElementById('bg');
+  const label = document.getElementById('color-label');
+
+  if (color === 'black') {
+    bg.style.background = '#000000';
+    label.textContent = 'BLACK';
+    label.style.color = '#444';
+  } else if (color === 'grey') {
+    const rgb = kelvinToRGB(currentKelvin);
+    bg.style.background = applyBrightness(rgb);
+    label.textContent = `GREY ${brightness}%`;
+    label.style.color = '#bbb';
+  } else {
+    const rgb = kelvinToRGB(currentKelvin);
+    bg.style.background = applyBrightness(rgb);
+    label.textContent = `WHITE ${currentKelvin}K`;
+    label.style.color = '#999';
+  }
+
+  // Update CT slider to reflect remote command
+  document.getElementById('ct-slider').value = currentKelvin;
+  document.getElementById('ct-val').textContent = `${currentKelvin}K`;
+  updateSwatch();
+
+  // Send ready after settle delay (default 250ms, or as commanded)
+  const delay = settleMs !== undefined ? settleMs : 250;
+  setTimeout(() => sendReady(color), delay);
+}
+
+function updateSwatch() {
+  const rgb = kelvinToRGB(currentKelvin);
+  document.getElementById('ct-swatch').style.background = applyBrightness(rgb);
+}
+
+// ── Wake Lock ────────────────────────────────────────────────────────────────
+async function acquireWakeLock() {
+  if (!('wakeLock' in navigator)) return;
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release', () => {
+      // Re-acquire when page becomes visible again
+      document.addEventListener('visibilitychange', reacquireWakeLock, { once: true });
+    });
+  } catch (e) {
+    console.warn('WakeLock failed:', e);
+  }
+}
+
+async function reacquireWakeLock() {
+  if (document.visibilityState === 'visible') await acquireWakeLock();
+}
+
+// ── WebSocket ────────────────────────────────────────────────────────────────
+function wsConnect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const host  = location.host;
+  ws = new WebSocket(`${proto}://${host}/ws/bg`);
+
+  const dot = document.getElementById('ws-dot');
+
+  ws.onopen = () => {
+    dot.className = 'dot green';
+    showHud();
+    ws.send(JSON.stringify({ type: 'bg_hello', ua: navigator.userAgent.slice(0, 80) }));
+  };
+
+  ws.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+    if (msg.type === 'bg_set') {
+      setColor(msg.color, msg.kelvin, msg.settle_ms, msg.brightness);
+    } else if (msg.type === 'bg_ping') {
+      ws.send(JSON.stringify({ type: 'bg_pong' }));
+    }
+  };
+
+  ws.onclose = () => {
+    dot.className = 'dot red';
+    setTimeout(wsConnect, 2000);
+  };
+
+  ws.onerror = () => { ws.close(); };
+}
+
+function sendReady(color) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'bg_ready', color }));
+  }
+}
+
+// ── HUD / Panel ──────────────────────────────────────────────────────────────
+function showHud() {
+  document.getElementById('hud').classList.add('visible');
+}
+
+function showPanel() {
+  clearTimeout(panelTimer);
+  document.getElementById('panel').classList.add('visible');
+  panelVisible = true;
+  panelTimer = setTimeout(() => {
+    document.getElementById('panel').classList.remove('visible');
+    panelVisible = false;
+  }, 4000);
+}
+
+document.body.addEventListener('click', (e) => {
+  if (e.target.closest('#panel')) return;
+  if (panelVisible) {
+    clearTimeout(panelTimer);
+    document.getElementById('panel').classList.remove('visible');
+    panelVisible = false;
+  } else {
+    showPanel();
+  }
+});
+
+// ── Fullscreen ───────────────────────────────────────────────────────────────
+function requestFS() {
+  const el = document.documentElement;
+  if (el.requestFullscreen) el.requestFullscreen({ navigationUI: 'hide' });
+  else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+}
+
+// ── Sliders ──────────────────────────────────────────────────────────────────
+document.getElementById('ct-slider').addEventListener('input', (e) => {
+  currentKelvin = parseInt(e.target.value);
+  document.getElementById('ct-val').textContent = `${currentKelvin}K`;
+  updateSwatch();
+  if (currentColor === 'white' || currentColor === 'grey') setColor(currentColor, currentKelvin, 0);
+});
+
+document.getElementById('br-slider').addEventListener('input', (e) => {
+  brightness = parseInt(e.target.value);
+  document.getElementById('br-val').textContent = `${brightness}%`;
+  if (currentColor === 'white' || currentColor === 'grey') {
+    setColor(currentColor, currentKelvin, 0);
+  }
+});
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+acquireWakeLock();
+wsConnect();
+updateSwatch();
+// Show HUD briefly on load
+showHud();
+</script>
+</body>
+</html>

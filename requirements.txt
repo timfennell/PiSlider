@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+pydantic
+requests
+numpy
+scipy
+astral
+opencv-python-headless
+crcmod
+lgpio
