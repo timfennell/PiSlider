@@ -1459,19 +1459,30 @@
 
                 <div class="row">
                     <div class="control-item half">
-                        <label>Pan Axis Mounting (°)</label>
-                        <input type="number" id="macro_rot_axis_angle" value="90" step="1" min="45" max="135"
-                            title="45-90°: tilted toward camera | 90°: vertical | 90-135°: tilted away from camera"
-                            oninput="macroCalc()">
+                        <label>Pan Axis Direction</label>
+                        <div id="macro_axis_dir_group" style="display:flex; gap:6px;">
+                          <button type="button" class="axis-dir-btn" data-dir="toward"
+                                  onclick="setAxisDir('toward')">Toward</button>
+                          <button type="button" class="axis-dir-btn active" data-dir="vertical"
+                                  onclick="setAxisDir('vertical')">Vertical</button>
+                          <button type="button" class="axis-dir-btn" data-dir="away"
+                                  onclick="setAxisDir('away')">Away</button>
+                        </div>
                     </div>
                     <div class="control-item half">
-                        <label>Orientation</label>
-                        <input type="text" id="macro_rot_axis_desc" value="vertical"
-                            placeholder="e.g., 45° toward, 90° vertical, 135° away">
+                        <label>Tilt from vertical (°)</label>
+                        <input type="number" id="macro_axis_tilt_mag" value="0" step="1" min="0" max="45"
+                            title="How far the pan axis leans. Direction is set by the buttons."
+                            oninput="setAxisDir(null)">
                     </div>
                 </div>
-                <div style="font-size:0.65rem; color:var(--text-dim); margin-bottom:8px;">
-                    Pan axis angle: 45-90° (toward camera) • 90° (vertical) • 90-135° (away from camera)
+                <!-- Stored value stays in the existing 45..135 convention so
+                     _colmap_pose() and project.json are unchanged. -->
+                <input type="hidden" id="macro_rot_axis_angle" value="90">
+                <input type="hidden" id="macro_rot_axis_desc" value="vertical">
+                <div id="macro_axis_summary"
+                     style="font-size:0.65rem; color:var(--text-dim); margin-bottom:8px;">
+                    Vertical &middot; stored as 90&deg; &middot; 100% of sphere reachable
                 </div>
 
                 <!-- Rotation Stage -->

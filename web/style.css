@@ -918,3 +918,12 @@ input[type="radio"] {
     color: var(--text);
     margin: 2px;
 }
+
+/* Pan axis direction toggle */
+.axis-dir-btn{flex:1;padding:7px 4px;border:1px solid var(--border,#2a2e3d);
+  background:var(--card2,#1f2330);color:var(--text-dim,#8a90a6);border-radius:6px;
+  font-size:0.72rem;cursor:pointer;transition:background .15s,color .15s,border-color .15s}
+.axis-dir-btn:hover{background:#272b3a;color:var(--text,#e8eaf0)}
+.axis-dir-btn.active{background:var(--accent-teal,#7c6efa);color:#fff;
+  border-color:var(--accent-teal,#7c6efa);font-weight:600}
+.axis-dir-btn:disabled{opacity:.4;cursor:not-allowed}

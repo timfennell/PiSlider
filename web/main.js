@@ -1,3 +1,45 @@
+
+// ── Pan axis direction toggle ────────────────────────────────────────────────
+// The stored value keeps the original 45..135 convention (90 = vertical,
+// <90 = toward camera, >90 = away) so _colmap_pose() and project.json are
+// untouched. The UI shows a direction + a magnitude instead, because the bare
+// number is easy to get backwards - a previous scan recorded 45 meaning
+// "toward" when it was being described as "-45 = away".
+let _axisDir = 'vertical';
+
+function setAxisDir(dir) {
+  if (dir) _axisDir = dir;
+  const magEl = document.getElementById('macro_axis_tilt_mag');
+  let mag = Math.abs(parseFloat(magEl?.value ?? 0)) || 0;
+  if (mag > 45) { mag = 45; if (magEl) magEl.value = 45; }
+  if (_axisDir === 'vertical') { mag = 0; if (magEl) { magEl.value = 0; magEl.disabled = true; } }
+  else if (magEl) { magEl.disabled = false; if (mag === 0) { mag = 45; magEl.value = 45; } }
+
+  const stored = _axisDir === 'toward' ? 90 - mag
+               : _axisDir === 'away'   ? 90 + mag
+               : 90;
+  const hid = document.getElementById('macro_rot_axis_angle');
+  if (hid) hid.value = stored;
+  const desc = document.getElementById('macro_rot_axis_desc');
+  if (desc) desc.value = _axisDir === 'vertical' ? 'vertical' : `${mag}° ${_axisDir} camera`;
+
+  document.querySelectorAll('#macro_axis_dir_group .axis-dir-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.dir === _axisDir));
+
+  // Reachable fraction of the sphere. A viewpoint is reachable only where
+  // |v_x| <= |cos(alpha)|, alpha = radians(90 - stored), so the fraction is
+  // |cos(alpha)| — leaning the axis over costs coverage.
+  const alpha = (90 - stored) * Math.PI / 180;
+  const reach = Math.abs(Math.cos(alpha));
+  const sum = document.getElementById('macro_axis_summary');
+  if (sum) {
+    const warn = reach < 0.75 ? ' style="color:var(--accent-amber)"' : '';
+    sum.innerHTML = (_axisDir === 'vertical' ? 'Vertical' : `${mag}° ${_axisDir} camera`)
+      + ` &middot; stored as ${stored}&deg; &middot; `
+      + `<span${warn}>${Math.round(reach*100)}% of sphere reachable</span>`;
+  }
+  if (typeof macroCalc === 'function') macroCalc();
+}
 /**
  * main.js — PiSlider Web Command Engine v2.4
  *
@@ -3883,7 +3925,7 @@ function macroStart() {
         rotation_easing: document.getElementById('macro_rotation_easing')?.value || 'even',
         rotation_axis_angle_deg: parseFloat(document.getElementById('macro_rot_axis_angle')?.value || 90),
         rotation_axis_description: document.getElementById('macro_rot_axis_desc')?.value || 'vertical',
-        pan_axis_tilt_deg: parseFloat(document.getElementById('macro_pan_axis_tilt_deg')?.value || 45),
+        pan_axis_tilt_deg: parseFloat(document.getElementById('macro_rot_axis_angle')?.value || 90),
         stereo_enabled: document.getElementById('macro_stereo_enabled')?.checked || false,
         stereo_offset_deg: parseFloat(document.getElementById('macro_stereo_offset_deg')?.value || 3.0),
         aux_enabled: true,  // Always enabled for geodesic 2D grid
