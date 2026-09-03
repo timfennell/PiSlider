@@ -281,7 +281,8 @@ let _flipStack      = 0;   // index into stacks[] for flipbook
 let _flipFrame      = 0;   // frame index within selected stack
 let _flipPlaying    = false;
 let _flipTimer      = null;
-let _imgCache       = {};  // url → HTMLImageElement
+let _imgCache       = {};  // url → HTMLImageElement | 'loading' | 'failed'
+let _imgTries       = {};  // url → attempt count (bounded retry)
 let _selectedStack  = -1;  // stack number of currently-selected node (for highlight)
 let _panAxisTiltDeg = 90.0; // received in macro_scan_start; corrects sphere placement
 
@@ -576,18 +577,27 @@ function paintFlipbook() {
   ctx.fillRect(0, 0, W, H);
 
   if (url) {
-    if (_imgCache[url] === undefined) {
-      // Kick off load
+    if (_imgCache[url] === undefined || _imgCache[url] === 'failed') {
+      // Kick off load. 'loading' and 'failed' are DISTINCT states: they were
+      // both null before, and since the retry gate is `=== undefined`, a URL
+      // that failed once could never be retried and stayed blank for the whole
+      // session. On a busy Pi (motors + RAW writes) transient failures are
+      // expected, so allow a bounded number of retries.
+      const tries = (_imgTries[url] = (_imgTries[url] || 0) + 1);
       const img = new Image();
       img.onload  = () => { _imgCache[url] = img; paintFlipbook(); };
-      img.onerror = () => { _imgCache[url] = null; paintFlipbook(); };
-      _imgCache[url] = null;  // mark as loading
+      img.onerror = () => {
+        _imgCache[url] = 'failed';
+        if (tries < 4) setTimeout(paintFlipbook, 1500 * tries);  // backoff retry
+        else paintFlipbook();
+      };
+      _imgCache[url] = 'loading';
       img.src = url;
       // Show loading text while waiting
       ctx.fillStyle = '#5a6a7a';
       ctx.font = '12px JetBrains Mono';
       ctx.fillText('Loading…', 12, H / 2);
-    } else if (_imgCache[url]) {
+    } else if (_imgCache[url] && typeof _imgCache[url] === 'object') {
       const im = _imgCache[url];
       const sc = Math.min(W / im.naturalWidth, H / im.naturalHeight);
       const iw = im.naturalWidth * sc, ih = im.naturalHeight * sc;
@@ -596,7 +606,7 @@ function paintFlipbook() {
   }
 
   // Info overlay (if no image loaded yet, show stack metadata)
-  if (!url || !_imgCache[url]) {
+  if (!url || !_imgCache[url] || typeof _imgCache[url] !== 'object') {
     if (s) {
       ctx.fillStyle = '#00d4ff';
       ctx.font = '13px JetBrains Mono';
