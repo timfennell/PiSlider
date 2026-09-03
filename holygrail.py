@@ -552,11 +552,19 @@ class AdaptiveEVTracker:
         self.ev_slope     = _weighted_slope(xs, evs, ws)
         self.kelvin_slope = _weighted_slope(xs, ks,  ws)
 
+        # Anchor the fitted line on the WEIGHTED CENTROID, not on evs[0].
+        # evs[0] is the oldest sample and therefore carries the *smallest*
+        # recency weight (decay^(n-1) ≈ 0.20 at n=20), so using it as the
+        # intercept let the least trustworthy point define the line's
+        # position: a single stale outlier shifted meas_ev by >1.2 stops and
+        # collapsed r² to 0, which in turn starved pixel_w via r2_mod.
+        x_bar = float(np.average(xs, weights=ws))
+        y_bar = float(np.average(evs, weights=ws))
+
         if len(xs) >= 3:
-            ev_pred = evs[0] + self.ev_slope * xs
+            ev_pred = y_bar + self.ev_slope * (xs - x_bar)
             ss_res  = float(np.sum(ws * (evs - ev_pred) ** 2))
-            ev_mean = float(np.average(evs, weights=ws))
-            ss_tot  = float(np.sum(ws * (evs - ev_mean) ** 2))
+            ss_tot  = float(np.sum(ws * (evs - y_bar) ** 2))
             self.r_squared = max(0.0, min(1.0, 1.0 - ss_res / max(ss_tot, 1e-9)))
         else:
             self.r_squared = 0.3
@@ -567,7 +575,7 @@ class AdaptiveEVTracker:
         # (what we last told the camera). The output only moves by max_step
         # in _compute_params. Separating these two is the key to smooth output.
         if len(meas) >= 2:
-            self.meas_ev = float(evs[0] + self.ev_slope * xs[-1])
+            self.meas_ev = float(y_bar + self.ev_slope * (xs[-1] - x_bar))
         else:
             self.meas_ev = float(evs[-1])
 
@@ -604,6 +612,7 @@ class HolyGrailController:
         )
         self._last_phase:    str            = 'unknown'
         self._last_aperture: Optional[float] = None   # for per-frame rate limiting
+        self._prev_iso:      Optional[int]   = None   # dead-zone ISO hysteresis
 
     # ── Configuration ─────────────────────────────────────────────────────────
 
@@ -927,12 +936,20 @@ class HolyGrailController:
         #
         # This is the primary "butter" control. The slope-driven output is then
         # clamped to max_step, so no single frame can make a large jump.
-        phase_agility = {
-            'day':      s.agility_day,
-            'golden':   s.agility_golden,
-            'twilight': s.agility_twilight,
-            'night':    s.agility_night,
-        }.get(phase, s.agility_golden)
+        # Interpolate agility across the phase pair, the way ev/kelvin/interval
+        # already do.  Taking it from the hard _phase_for_alt step meant that at
+        # sun_alt = -6 exactly — the start of nautical twilight, the fastest
+        # light change of the whole day — agility dropped from agility_twilight
+        # to agility_night ("stable darkness — tiny corrections only") while the
+        # interval simultaneously doubled.
+        _ag = {'day':      s.agility_day,
+               'golden':   s.agility_golden,
+               'twilight': s.agility_twilight,
+               'night':    s.agility_night}
+        _p0, _p1, _tt = _phase_pair(sun_alt)
+        _a0 = _ag.get(_p0, s.agility_golden)
+        _a1 = _ag.get(_p1, s.agility_golden)
+        phase_agility = _a0 if _p0 == _p1 else _a0 + (_a1 - _a0) * _tt
 
         # Horizon boost: near sunrise/sunset OR moonrise/moonset, allow more
         # agility so we don't lag behind rapid lighting changes.
@@ -952,6 +969,7 @@ class HolyGrailController:
 
         highlight_override = False
         shadow_override    = False
+        drift_gap          = 0.0   # brightness error (stops, pixel-EV domain)
 
         if anchor_set and not tracker_warm:
             # Cold start — no regression yet (either very first frames of the
@@ -995,9 +1013,59 @@ class HolyGrailController:
                 pixel_w_live = pixel_w
                 astro_w_live = astro_w
 
+            # ── Brightness error (proportional term) ──────────────────────────
+            # drift_gap is the number of stops ev_smooth must move to land the
+            # capture on its midtone setpoint.  Both terms are pixel EV (log2 of
+            # image luminance), so the difference is scale-consistent — unlike
+            # total_astro_ev, which is a camera-EV constant and was what pinned
+            # the output at ev_night and produced black night frames.
+            #
+            # The two output modes measure different things and need different
+            # algebra:
+            #
+            #  * No anchor: meter shots are the captures themselves with
+            #    camera_ev_offset = 0 (app.py:2301), so meas_ev IS the delivered
+            #    image brightness.  This is a true closed loop, and since one
+            #    stop of ev_smooth changes the delivered brightness by one stop
+            #    the required move is just the error itself.
+            #
+            #  * Anchor set: every meter shot is either taken at the fixed
+            #    anchor exposure (app.py:3176) or normalized back to it by
+            #    camera_ev_offset (app.py:2310).  meas_ev is therefore SCENE
+            #    brightness on the anchor scale and does not respond to what we
+            #    commanded — open loop.  Solve it directly instead:
+            #        delivered = meas_ev - (ev_smooth - anchor_ev) = target
+            #    so the command we want is anchor_ev + meas_ev - target.
+            meas_ev = self._tracker.meas_ev
+            if meas_ev is not None and pixel_w_live > 0.0:
+                _target_px = self._midtone_target_ev(sun_alt)
+                if anchor_set:
+                    drift_gap = (s.anchor_ev + meas_ev - _target_px) - last_ev
+                else:
+                    drift_gap = meas_ev - _target_px
+            else:
+                drift_gap = 0.0
+
+            # ── Error-adaptive agility ────────────────────────────────────────
+            # The fixed per-phase agility cannot follow nautical twilight.
+            # Measured at Winnipeg in September: between -6 and -12 deg the sky
+            # falls ~0.081 stops/frame, while agility_night (0.020) with the
+            # horizon boost allows ~0.026 — so the loop fell behind by ~8 stops
+            # and the rate limit then held it there.  Scaling the allowance by
+            # the size of the brightness error fixes the lag without touching
+            # steady-state smoothness: once converged the boost is ~1.0.
+            err_boost    = 1.0 + min(4.0, abs(drift_gap) / 0.5)
+            max_step_eff = max_step * err_boost
+
             # Apply staleness to slope step as well.
-            slope_step = max(-max_step, min(max_step,
-                             self._tracker.slope_ma * interval_base * pixel_w_live))
+            # NOTE: slope_ma is the rate of change of the brightness ERROR, so
+            # it is the derivative term of the loop. It is deliberately NOT
+            # scaled by pixel_w (that weight expresses trust in the absolute
+            # level, not in the rate); scaling it there throttled the ramp to
+            # 15% of the required rate at night.
+            slope_gate = 0.0 if pixel_w_live <= 0.0 else 1.0
+            slope_step = max(-max_step_eff, min(max_step_eff,
+                             self._tracker.slope_ma * interval_base * slope_gate))
 
             # ── Drift pull (#4 + remove ×10 bug) ─────────────────────────────
             # Drift pull steers ev_smooth toward reality so it stays anchored
@@ -1016,32 +1084,18 @@ class HolyGrailController:
             # could get stuck multiple stops above reality during golden hour
             # (western horizon glow triggers the brake throughout the whole
             # sunset, leaving the camera 4+ stops underexposed by twilight).
-            meas_ev = self._tracker.meas_ev
-            if meas_ev is not None:
-                # At night in anchor mode, meas_ev has been normalized to anchor
-                # scale by the caller (Sony USB) — so it represents actual scene
-                # brightness rather than what the camera happened to record at its
-                # current settings.  Trust it directly; the astro EV targets
-                # (ev_night=3.0) are calibrated for the no-anchor path and are
-                # meaningless as drift targets in anchor-delta mode at night.
-                if anchor_set and phase in ('night', 'twilight'):
-                    drift_target = meas_ev
-                else:
-                    drift_target = (meas_ev * pixel_w_live +
-                                    total_astro_ev * astro_w_live)
-                drift_gap    = drift_target - last_ev
-
+            if drift_gap != 0.0:
                 # ── Emergency recovery (#1) ───────────────────────────────────
-                # If ev_smooth has drifted > 1.5 stops from meas_ev (e.g. after
-                # a long cloudy gap or a missed capture burst), increase the
-                # pull cap to 1.5× max_step so we can recover in ~10 frames
-                # rather than staying badly mis-exposed for a long run.
-                emergency = abs(meas_ev - last_ev) > 1.5
-                pull_cap = max_step * 1.5 if emergency else max_step * 0.5
+                # A brightness error over 1.5 stops (cloud bank, missed capture
+                # burst, a phase ramp we fell behind on) widens the pull cap so
+                # we recover in ~10 frames instead of staying mis-exposed.
+                emergency = abs(drift_gap) > 1.5
+                pull_cap = max_step_eff * (1.5 if emergency else 0.5)
                 if emergency:
                     logger.info(
                         f"HG emergency recovery: meas_ev={meas_ev:.2f} "
-                        f"last_ev={last_ev:.2f} gap={meas_ev - last_ev:+.2f}")
+                        f"target={self._midtone_target_ev(sun_alt):.2f} "
+                        f"gap={drift_gap:+.2f}")
 
                 # NOTE: drift_pull_strength is used directly (no ×10 multiplier).
                 # The historical bug applied ×10 here, making a setting of 0.003
@@ -1051,7 +1105,11 @@ class HolyGrailController:
                                  min(pull_cap,
                                      drift_gap * s.drift_pull_strength))
             else:
-                drift_pull = (total_astro_ev - last_ev) * s.drift_pull_strength
+                # No usable measurement (cold or stale): hold position and let
+                # the slope term dead-reckon. Pulling toward total_astro_ev here
+                # is what produced the black frames — it is a camera-EV constant
+                # and cannot be compared against a pixel-EV output.
+                drift_pull = 0.0
 
             # ── Slope-only interim (before braking) ───────────────────────────
             # Compute the slope-driven position first, then apply the brake only
@@ -1187,32 +1245,33 @@ class HolyGrailController:
                      and iso   <= int(s.iso_min   * 1.02))
 
         if _at_upper or _at_lower:
-            # Genuine hardware limit — stop ev_smooth from drifting further.
+            # ── Integrator freeze (clamping anti-windup) ─────────────────────
+            # The camera is against a hardware limit. Moving the command
+            # further in that direction cannot change a single pixel, so any
+            # such movement is pure windup: freeze at last_ev.
             #
-            # CEILING AT NIGHT (anchor or no-anchor): when the camera is pegged
-            # at max shutter + max ISO during night/twilight, nudging ev_smooth
-            # back toward blended_ev (≈ ev_night = 3.0) would prevent it from
-            # reaching the deeply negative values needed to command max settings
-            # from an anchor calibrated during bright daylight.  Hold in place
-            # and let the tracker drive ev_smooth as low as needed.
+            # This branch used to only skip a nudge, leaving drift_pull and the
+            # slope term free to keep integrating. Measured in simulate_hg.py:
+            # ev_smooth reached -332 stops across one night against a sky
+            # darker than the camera can record, and +152 stops across one day
+            # with the shutter pegged at 1/8000. Either way the command had to
+            # travel all of that back before the exposure moved at all, so the
+            # following sunrise/sunset came out black.
             #
-            # LOWER FLOOR: nudge ev_smooth toward blended_ev so the camera
-            # doesn't stay pegged at fastest shutter + minimum ISO when the
-            # scene brightens.
-            if _at_upper and phase in ('night', 'twilight'):
-                logger.debug(
-                    f"HG anti-windup: night ceiling ({'anchor' if anchor_set else 'no-anchor'}) "
-                    f"— holding ev_smooth={ev_smooth:.3f}")
-            else:
-                _target = blended_ev
-                _nudge  = max(-0.5, min(0.5, (_target - ev_smooth) * 0.1))
-                ev_smooth_before = ev_smooth
-                ev_smooth = ev_smooth + _nudge
+            # The direction of travel is the whole test — deliberately not the
+            # sign of drift_gap, which is 0 when there is no usable measurement
+            # and would let the slope term integrate unchecked. Freezing at
+            # last_ev leaves the loop ready to reverse the instant the light
+            # comes back.
+            if last_ev is not None:
+                if _at_upper and ev_smooth < last_ev:      # no more light available
+                    ev_smooth = last_ev
+                elif _at_lower and ev_smooth > last_ev:    # no less light available
+                    ev_smooth = last_ev
                 self._tracker._last_ev = ev_smooth
                 logger.debug(
                     f"HG anti-windup: {'ceiling' if _at_upper else 'floor'} hit "
-                    f"ev {ev_smooth_before:.3f}→{ev_smooth:.3f} "
-                    f"nudge={_nudge:.3f} target={_target:.3f}")
+                    f"— frozen at ev_smooth={ev_smooth:.3f} (gap={drift_gap:+.2f})")
 
         # 10. Interval floor + adaptive shortening (#6)
         required = shutter_s + s.vibration_delay + s.exposure_margin
@@ -1433,6 +1492,22 @@ class HolyGrailController:
         e0, e1 = m.get(p0, s.ev_day), m.get(p1, s.ev_day)
         return e0 if p0 == p1 else e0 + (e1 - e0) * t
 
+    def _midtone_target_ev(self, sun_alt: float) -> float:
+        """Desired image brightness for this sun altitude, on the pixel-EV scale.
+
+        This is the setpoint the exposure loop steers toward.  midtone_target_day
+        / midtone_target_night were declared but never read, which left the loop
+        with no brightness reference at all: it steered ev_smooth toward
+        total_astro_ev (ev_night = 3.0), a *camera*-EV constant, while its only
+        feedback (meas_ev) is *pixel* EV.  At night those scales differ by ~8
+        stops, so the output parked on ev_night and every frame came out black.
+        """
+        s = self.settings
+        t = _smootherstep((0.0 - sun_alt) / 12.0)   # 0 at sunset, 1 at -12 deg
+        p50 = (s.midtone_target_day
+               + (s.midtone_target_night - s.midtone_target_day) * t)
+        return _p50_to_pixel_ev(p50)
+
     def _kelvin_for_phase(self, sun_alt: float) -> int:
         s = self.settings
         p0, p1, t = _phase_pair(sun_alt)
@@ -1508,17 +1583,59 @@ class HolyGrailController:
             new_s = _snap_s(s.anchor_shutter_s / (2 ** ev_delta))
             if slo <= new_s <= shi:
                 new_iso = _snap_1_3_iso(s.anchor_iso)
+                self._prev_iso = new_iso
             else:
                 new_s   = _snap_s(max(slo, min(shi, new_s)))
                 s_ev    = math.log2(s.anchor_shutter_s / new_s)
                 remain  = ev_delta - s_ev
-                new_iso = s.anchor_iso / (2 ** remain)
-                new_iso = _snap_1_3_iso(max(s.iso_min, min(iso_max, new_iso)))
+                ideal_iso = s.anchor_iso / (2 ** remain)
+
+                # Best achievable exposure for a candidate ISO, given that the
+                # shutter is already against a limit.
+                def _err_for(iso_c):
+                    want_t = s.anchor_shutter_s / (
+                        2 ** (ev_delta - math.log2(s.anchor_iso / max(iso_c, 1e-1))))
+                    got_t  = _snap_s(max(slo, min(shi, want_t)))
+                    got_ev = (math.log2(s.anchor_shutter_s / max(got_t, 1e-9))
+                              + math.log2(s.anchor_iso / max(iso_c, 1e-1)))
+                    return abs(got_ev - ev_delta), got_t
+
+                dz_iso = _snap_1_3_iso(max(s.iso_min, min(iso_max, ideal_iso)))
                 # Skip the dual-gain dead zone: jump from iso_min to iso_native_high
                 # rather than stepping through intermediate ISOs that have worse DR
                 # than iso_min AND worse noise than iso_native_high.
-                if s.iso_native_high and s.iso_min < new_iso < s.iso_native_high:
-                    new_iso = s.iso_native_high
+                if s.iso_native_high and s.iso_min < dz_iso < s.iso_native_high:
+                    # Both edges of the dead zone are legal; take the closer one
+                    # rather than always rounding up, so we don't overshoot by
+                    # the full 2.7-stop step when iso_min was the better fit.
+                    dz_iso = min((s.iso_min, s.iso_native_high),
+                                 key=lambda c: _err_for(c)[0])
+                new_iso, new_s = dz_iso, _err_for(dz_iso)[1]
+
+                # ── Dead-zone escape ─────────────────────────────────────────
+                # iso_min -> iso_native_high is a single 2.7-stop step (100->640
+                # on the A7III). With the shutter pegged at its ceiling there is
+                # then no achievable exposure near the target: the loop sees a
+                # large error whichever edge it picks, corrects, overshoots, and
+                # limit-cycles — a 2.7-stop flicker every few frames. The dead
+                # zone is a noise/DR optimisation; visible flicker is far worse,
+                # so when neither edge lands within 0.75 stop we fall back to
+                # the full 1/3-stop ladder.
+                if _err_for(new_iso)[0] > 0.75:
+                    esc_iso = _snap_1_3_iso(max(s.iso_min, min(iso_max, ideal_iso)))
+                    if _err_for(esc_iso)[0] < _err_for(new_iso)[0] - 0.1:
+                        new_iso, new_s = esc_iso, _err_for(esc_iso)[1]
+
+                # Hysteresis: keep the ISO we are already on unless switching
+                # buys more than half a stop of accuracy, so small wander near a
+                # boundary does not toggle it back and forth.
+                prev_iso = self._prev_iso
+                if prev_iso and prev_iso != new_iso and s.iso_min <= prev_iso <= iso_max:
+                    e_new,  _      = _err_for(new_iso)
+                    e_prev, t_prev = _err_for(prev_iso)
+                    if e_prev - e_new < 0.5:
+                        new_iso, new_s = prev_iso, t_prev
+                self._prev_iso = new_iso
 
             # Sidecar error: actual stops of compensation vs ideal (continuous) delta.
             # Positive = camera gave more exposure than requested (overexposed).
@@ -1641,6 +1758,14 @@ def _snap_1_3_aperture(f: float) -> float:
     stops2 = math.log2(max(1.0, f)) * 2.0
     snapped_stops2 = round(stops2 * 3.0) / 3.0
     return 2.0 ** (snapped_stops2 / 2.0)
+
+def _p50_to_pixel_ev(p50: float) -> float:
+    """Convert a target P50 luminance (0-255) to the same pixel-EV scale that
+    push_meter_shot() produces for meter_ev.  Keeping the setpoint and the
+    measurement in one scale is what makes the brightness loop closable."""
+    lum = max(float(p50), 1.0) / 255.0
+    return math.log2(max(lum ** 2.2, 1e-9) / 0.18) + 12.0
+
 
 def _smootherstep(t: float) -> float:
     t = max(0.0, min(1.0, t))

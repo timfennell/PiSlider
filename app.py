@@ -3129,18 +3129,56 @@ def _take_meter_shot(frame_index: int) -> Optional[dict]:
         return None
 
     try:
-        # 1. Switch camera to fixed anchor settings
+        # 1. Choose the meter exposure.
+        #
+        # Anchor metering keeps every reading directly comparable, but only
+        # while the anchor exposure can still SEE the scene. A daylight anchor
+        # (1/100 s, ISO 100) photographing a night sky returns a pure black
+        # frame: midtone_p50 floors at 1 and meter_ev saturates at -3.1 no
+        # matter how dark the sky actually gets. The tracker then sees a
+        # constant, cannot drive the exposure down toward the ~-7.7 EV a
+        # starfield needs, and every night frame comes out black.
+        #
+        # So once the creative capture has moved more than 3 stops away from
+        # the anchor, meter at an exposure near the capture's own and normalize
+        # the reading back to the anchor scale via camera_ev_offset — exactly
+        # what the variable-exposure path does. The shutter is capped at 2 s so
+        # metering never adds a 25-second stall to the interval; the missing
+        # light is made up with gain, and the offset is computed from whatever
+        # settings we actually used, so the normalization stays exact.
+        m_shutter    = hg.settings.anchor_shutter_s
+        m_iso        = float(hg.settings.anchor_iso)
+        meter_offset = 0.0
+        if _last_hg_params:
+            _cs = _last_hg_params.get('shutter_s')
+            _ci = _last_hg_params.get('iso')
+            if _cs and _ci:
+                _off = (math.log2(max(_cs, 1e-6) / hg.settings.anchor_shutter_s) +
+                        math.log2(max(_ci, 1e-1) / hg.settings.anchor_iso))
+                if abs(_off) > 3.0:
+                    m_shutter = min(float(_cs), 2.0)
+                    m_iso     = min(float(hg.settings.iso_max_night),
+                                    max(float(hg.settings.iso_min),
+                                        float(_ci) * (float(_cs) / m_shutter)))
+                    meter_offset = (
+                        math.log2(max(m_shutter, 1e-6) / hg.settings.anchor_shutter_s) +
+                        math.log2(max(m_iso,     1e-1) / hg.settings.anchor_iso))
+                    logger.debug(
+                        f"Meter shot adaptive: {m_shutter:.4f}s ISO{int(m_iso)} "
+                        f"offset={meter_offset:+.2f} (capture {_cs:.4f}s ISO{int(_ci)})")
+
         anchor_controls = {
             "AeEnable":       False,
             "AwbEnable":      False,
-            "ExposureTime":   max(1, int(hg.settings.anchor_shutter_s * 1_000_000)),
-            "AnalogueGain":   max(1.0, hg.settings.anchor_iso / 100.0),
+            "ExposureTime":   max(1, int(m_shutter * 1_000_000)),
+            "AnalogueGain":   max(1.0, m_iso / 100.0),
             "ColourGains":    (1.0, 1.0),  # neutral WB for meter shot
         }
         picam.set_controls(anchor_controls)
 
-        # Brief settle — one preview frame to let the ISP apply the controls
-        import time as _t; _t.sleep(0.25)
+        # Brief settle — let the ISP apply the controls and, when we are
+        # metering with a long adaptive shutter, actually finish the exposure.
+        import time as _t; _t.sleep(max(0.25, m_shutter * 1.5 + 0.1))
 
         # 2. Capture a JPEG preview frame (not a full DNG — fast, no disk writes)
         frame_array = picam.capture_array()
@@ -3173,7 +3211,8 @@ def _take_meter_shot(frame_index: int) -> Optional[dict]:
         sun_alt = _se(hg._location.observer,
                       datetime.datetime.now(hg._tzinfo))
 
-        result = hg.push_meter_shot(rgb, sun_alt=sun_alt)
+        result = hg.push_meter_shot(rgb, sun_alt=sun_alt,
+                                    camera_ev_offset=meter_offset)
         if result:
             logger.info(
                 f"Meter shot frame={frame_index}: "
