@@ -7,6 +7,15 @@ Three-axis motion (slide, pan, tilt) with a FastAPI backend and a browser UI,
 built for long timelapse and macro capture sessions where the rig has to be
 left alone for hours.
 
+This app is designed to be used with the pi setup as a hotspot. then the app interface can be accessed by a webpage: http://pislider.local:8000/ the pi needs configuration to be correctly setup. I'm planning to create an script to do this setup, but it is in the works.
+
+#Known issues:
+Holygrail mode isn't working in the version. Hopefully will be updated soon.
+Macro scan mode multi stack node distribution isn't finished yet. Coming soon
+#
+
+Hardware lists and DIY setup instructions coming soon!
+
 ## Modes
 
 - **Timelapse** — including a holy-grail mode that ramps exposure through
