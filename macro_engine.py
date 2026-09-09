@@ -459,7 +459,14 @@ def motors_for_viewpoint(v, pan_axis_tilt_deg: float = 90.0):
         pan = math.degrees(th) % 360.0
         if pan > 180.0:
             pan -= 360.0
+        # Normalise tilt the same way pan is. viewpoint_for() is periodic in
+        # tilt with period 360, so +354 deg and -6 deg name the identical
+        # viewpoint -- but _move_rotation travels delta = target - current, so
+        # leaving it in [0, 360) turned a 20 deg move into a 340 deg one and
+        # sent the aux axis spinning the specimen for no coverage benefit.
         tilt = math.degrees(phi) % 360.0
+        if tilt > 180.0:
+            tilt -= 360.0
         err = float(np.degrees(np.arccos(np.clip(
             float(np.dot(viewpoint_for(pan, tilt, pan_axis_tilt_deg), v)), -1.0, 1.0))))
         if best is None or err < best[0]:
@@ -569,6 +576,45 @@ def _serpentine_motor_order(kept):
             order += list(idx)
         return order
 
+    # Chord-squared distance: monotone in angular distance, so comparisons and
+    # 2-opt swaps are valid without paying for an arccos per pair.
+    D = 1.0 - (P @ P.T)
+    np.fill_diagonal(D, np.inf)
+
+    def build_greedy(start):
+        """Nearest-neighbour walk over the sphere, then 2-opt.
+
+        Banding alone skips past close nodes to reach the next band: measured
+        33 deg mean separation between consecutive captures where the nearest
+        neighbour was only 17 deg away, and 11 of 35 steps over 40 deg. Walking
+        to the actual nearest unvisited node keeps consecutive frames as close
+        as the distribution allows, which is what gives them overlap.
+        """
+        n = len(P)
+        unvisited = set(range(n))
+        cur = start
+        order = [cur]
+        unvisited.discard(cur)
+        while unvisited:
+            u = np.fromiter(unvisited, dtype=int)
+            nxt = int(u[np.argmin(D[cur, u])])
+            order.append(nxt)
+            unvisited.discard(nxt)
+            cur = nxt
+        # 2-opt: uncross the path. Capped because this runs per candidate and
+        # num_stacks can be in the hundreds.
+        for _ in range(12):
+            improved = False
+            for i in range(1, len(order) - 2):
+                for j in range(i + 1, len(order) - 1):
+                    a, b, c, d = order[i - 1], order[i], order[j], order[j + 1]
+                    if D[a, b] + D[c, d] > D[a, c] + D[b, d] + 1e-12:
+                        order[i:j + 1] = order[i:j + 1][::-1]
+                        improved = True
+            if not improved:
+                break
+        return order
+
     def worst(o):
         Q = P[np.array(o)]
         st = np.degrees(np.arccos(np.clip(np.sum(Q[:-1] * Q[1:], axis=1), -1, 1)))
@@ -587,6 +633,20 @@ def _serpentine_motor_order(kept):
             w = worst(o)
             if best is None or w < best[0]:
                 best = (w, o)
+
+    # Greedy+2-opt from several seeds. A nearest-neighbour walk is sensitive to
+    # where it starts, so try the extremes of the reachable region as well as
+    # the first node; the same worst-step test picks the winner.
+    seeds = {0, int(np.argmax(P[:, 2])), int(np.argmin(P[:, 2])),
+             int(np.argmax(pans)), int(np.argmin(pans))}
+    for sd in seeds:
+        o = build_greedy(sd)
+        if len(o) != len(kept):
+            continue
+        w = worst(o)
+        if best is None or w < best[0]:
+            best = (w, o)
+
     return best[1] if best else list(range(len(kept)))
 
 
@@ -711,15 +771,26 @@ def orbit_positions(session: MacroSession) -> List[tuple]:
     For scan_type='orbit': return list of (pan_deg, tilt_deg) tuples.
 
     If aux_enabled is False (single orbit): all stacks at aux_start_deg tilt.
-    If aux_enabled is True (sphere coverage): delegates to geodesic_orbit_positions()
-    for an evenly distributed grid that accounts for the tilted pan axis.
+    If aux_enabled is True (sphere coverage): even node placement over the
+    reachable surface, serpentine-ordered, via plan_geodesic_nodes().
 
     Returns num_stacks tuples in serpentine order.
+
+    NOTE: this used to call geodesic_orbit_positions(), which despite its name
+    produces a HELIX — the aux axis spins continuously (5 turns = 1800° of tilt)
+    while pan creeps, so coverage bunches along the spiral and the tilt position
+    runs to +873° by node 20. plan_geodesic_nodes() is the intended replacement:
+    it distributes nodes evenly and connects them with a serpentine path that
+    keeps consecutive frames overlapping, which is what COLMAP needs.
+
+    The UI hardcodes scan_type='orbit' (web/main.js), so routing the geodesic
+    planner in here is what actually puts it in the capture path — it was
+    unreachable while it lived only behind scan_type == 'geodesic'.
     """
     if not session.aux_enabled:
         tilt = session.aux_start_deg
         return [(pan, tilt) for pan in rotation_angles(session)]
-    return geodesic_orbit_positions(session)
+    return [(n["pan_deg"], n["tilt_deg"]) for n in plan_geodesic_nodes(session)]
 
 
 def _fibonacci_sphere(n: int) -> List[tuple]:
@@ -2234,9 +2305,10 @@ class MacroEngine:
         is_grid = session.scan_type == "grid_2d"
         g_pos   = grid_positions(session) if is_grid else []
 
-        # For orbit mode, use orbit_positions() which delegates to
-        # geodesic_orbit_positions() when aux_enabled=True, giving even
-        # spherical coverage corrected for the physical pan axis tilt.
+        # For orbit mode, use orbit_positions(), which delegates to
+        # plan_geodesic_nodes() when aux_enabled=True: nodes distributed evenly
+        # over the reachable surface (corrected for the physical pan axis tilt)
+        # and ordered so consecutive captures overlap.
         if is_grid:
             angles  = [p[0] for p in g_pos]
             aux_pos = [p[1] for p in g_pos]
@@ -2984,6 +3056,16 @@ class MacroEngine:
         """Move pan (and optionally tilt/aux) to target angles."""
         delta_pan  = rot_deg  - self.pan_pos_deg
         delta_aux  = (aux_deg - self.tilt_pos_deg) if aux_deg is not None else 0.0
+
+        # Take the short way round on tilt. The aux axis is a free 360 deg
+        # rotation and viewpoint_for() is periodic in it, so +159 deg -> -174 deg
+        # is a 26 deg move, not the 333 deg the literal difference asks for.
+        # Measured 307 deg of wasted travel across a 36-node scan before this.
+        #
+        # Pan is deliberately NOT wrapped: it is the cable-limited axis with soft
+        # limits, so the long way round may be the only legal way round.
+        if aux_deg is not None:
+            delta_aux = (delta_aux + 180.0) % 360.0 - 180.0
 
         pan_steps  = int(delta_pan * PAN_STEPS_PER_DEG)
         tilt_steps = int(delta_aux * TILT_STEPS_PER_DEG)
