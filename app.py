@@ -716,8 +716,15 @@ def _build_macro_session(msg: dict) -> "MacroSession":
         rotation_axis_angle_deg = float(msg.get("rotation_axis_angle_deg", 90.0)),
         rotation_axis_description = msg.get("rotation_axis_description",   "vertical"),
         # Aux / tilt axis (geodesic 2D grid)
+        # Default True for orbit as well as grid_2d. The UI always sends
+        # aux_enabled: true (web/main.js), so the only way the key goes missing
+        # is a stale cached client — and the old default silently produced a
+        # DEGENERATE scan rather than failing: orbit_positions() falls back to
+        # "all stacks at aux_start_deg", i.e. one flat ring at a single tilt
+        # instead of geodesic coverage of the sphere. That is hard to spot,
+        # because it still plans the right number of stacks and runs happily.
         aux_enabled          = bool(msg.get("aux_enabled",
-                                    msg.get("scan_type") == "grid_2d")),
+                                    msg.get("scan_type") in ("grid_2d", "orbit"))),
         aux_label            = msg.get("aux_label",                "tilt"),
         aux_start_deg        = float(msg.get("aux_start_deg",
                                 state.get("macro_aux_start_deg", 0.0))),

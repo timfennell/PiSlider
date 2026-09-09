@@ -2299,6 +2299,25 @@ class MacroEngine:
         logger.info(f"  Rail: {session.rail_start_steps}→{session.rail_end_steps} steps (≈{start_mm:.1f}→{end_mm:.1f}mm, {travel_steps} steps / ≈{travel_mm:.1f}mm travel)")
         logger.info(f"  Images/Stack: {session.images_per_stack} | Stacks: {session.num_stacks}")
         logger.info(f"  Total Frames: {session.num_stacks * session.images_per_stack}")
+
+        # Log what actually decides the path shape. Diagnosing a scan that came
+        # out as a single flat ring took reading the whole planned node list,
+        # because none of these were recorded.
+        logger.info(f"  Path: aux_enabled={session.aux_enabled} "
+                    f"(False = one ring at a single tilt, not sphere coverage) | "
+                    f"pan {session.rotation_start_deg:+.1f}°→{session.rotation_end_deg:+.1f}° | "
+                    f"tilt {session.aux_start_deg:+.1f}°→{session.aux_end_deg:+.1f}° | "
+                    f"pan_axis_tilt={getattr(session, 'pan_axis_tilt_deg', 90.0):.1f}°")
+        if not session.aux_enabled:
+            logger.warning("  ⚠ aux_enabled is False — every stack will sit at the same "
+                           "tilt. Geodesic sphere coverage needs it on.")
+        if session.rail_start_steps == session.rail_end_steps:
+            logger.warning(f"  ⚠ Rail start == rail end ({session.rail_start_steps} steps) — "
+                           f"all {session.images_per_stack} frames of every stack will be shot at "
+                           "the SAME focus position, so nothing will stack.")
+        if abs(session.aux_start_deg - session.aux_end_deg) < 1.0 and session.aux_enabled:
+            logger.warning(f"  ⚠ tilt range is {abs(session.aux_start_deg - session.aux_end_deg):.1f}° "
+                           "wide — nodes cannot spread over the sphere.")
         logger.info("="*70)
 
         # Compute full position lists once
