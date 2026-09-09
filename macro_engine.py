@@ -2200,13 +2200,19 @@ class MacroEngine:
     """
 
     def __init__(self, hardware, capture_fn, apply_camera_fn, broadcast_fn,
-                 drain_fn=None, bg_fn=None):
+                 drain_fn=None, bg_fn=None, pos_fn=None):
         self.hw           = hardware
         self._capture     = capture_fn
         self._apply_cam   = apply_camera_fn
         self._broadcast   = broadcast_fn
         self._drain       = drain_fn   # async callable — flushes pipelined USB downloads
         self._bg          = bg_fn      # async callable — phone bg matte control
+        # callable(pan_deg, tilt_deg) — pushes this engine's position back to the
+        # app's live axis trackers. Without it pan_axis.current_deg goes stale the
+        # moment a macro scan moves anything, so the position that is persisted
+        # across restarts, written into the XMP sidecars and used to seed the NEXT
+        # scan all describe where the arm was before this scan started.
+        self._pos         = pos_fn
         self._stop_event  = asyncio.Event()
         self.is_running   = False
 
@@ -2260,12 +2266,28 @@ class MacroEngine:
         self._stop_event.clear()
         self.is_running  = True
 
-        # Reset position tracking to home (0°, 0°) at the start of every scan.
-        # Motors must be at home before starting — if pan_pos_deg carried over
-        # a previous scan's final position, the first delta move would be huge
-        # and could drive the pan arm into its physical stops.
-        self.pan_pos_deg  = 0.0
-        self.tilt_pos_deg = 0.0
+        # DO NOT reset position tracking here.
+        #
+        # This used to force pan_pos_deg = tilt_pos_deg = 0.0 on the assumption
+        # that "motors must be at home before starting". Nothing verified that,
+        # and app.py had already seeded the real position from the live axis
+        # tracker (macro_eng.pan_pos_deg = pan_axis.current_deg) immediately
+        # before calling run() — so this threw away the truth and replaced it
+        # with a fiction.
+        #
+        # The consequence is not cosmetic. _move_rotation issues RELATIVE step
+        # moves (delta = target - pan_pos_deg) and checks the soft limits
+        # against pan_pos_deg. Believing pan sat at 0° when it was physically
+        # elsewhere meant every limit check passed while the arm was offset by
+        # the difference, so the pan arm was driven outside the configured
+        # range and into the background rig. Observed on three consecutive
+        # runs, each starting "pan +0.0° -> ..." from a different real position.
+        #
+        # pan_axis.current_deg is persisted across restarts and is what gets
+        # written into the XMP sidecars, so it is the authoritative frame.
+        logger.info(f"🧭 Start position (from live axis trackers): "
+                    f"pan {self.pan_pos_deg:+.2f}°, tilt {self.tilt_pos_deg:+.2f}°, "
+                    f"rail {self.rail_pos_steps} steps")
 
         # Build folder tree
         self._proj_folder = project_folder(session)
@@ -3092,28 +3114,53 @@ class MacroEngine:
         if pan_steps == 0 and tilt_steps == 0:
             return
 
-        # Enforce soft limits — STOP the scan rather than silently overtravel
+        # ── Pan soft limits: refuse, never overtravel ─────────────────────────
+        #
+        # Pan is the axis that crashes. Exceeding the user's range drives the arm
+        # into the background rig, so this check is unconditional and the move is
+        # abandoned rather than clamped: a clamped move would silently shoot the
+        # wrong geometry, and if the frame is wrong (see below) clamping would
+        # still put the arm somewhere unintended.
+        #
+        # This used to be skipped entirely unless pan_lo < pan_hi - 5.0, so a
+        # narrow or mis-parsed range disabled enforcement altogether — exactly
+        # when it matters most.
         new_pan  = self.pan_pos_deg + delta_pan
         new_tilt = self.tilt_pos_deg + delta_aux
 
         pan_lo = min(session.rotation_start_deg, session.rotation_end_deg)
         pan_hi = max(session.rotation_start_deg, session.rotation_end_deg)
-        if pan_lo < pan_hi - 5.0:   # only enforce if a real range is configured
-            clamped_pan = float(np.clip(new_pan, pan_lo, pan_hi))
-            if abs(clamped_pan - new_pan) > 0.5:
-                raise RuntimeError(
-                    f"Pan soft-limit violation: target {new_pan:.1f}° is outside "
-                    f"configured range [{pan_lo:.1f}°, {pan_hi:.1f}°]"
-                )
-            delta_pan = clamped_pan - self.pan_pos_deg
-            new_pan   = clamped_pan
-            pan_steps = int(delta_pan * PAN_STEPS_PER_DEG)
 
-        # Note: tilt/aux is NOT clamped here — in orbit helix scans the aux motor
-        # rotates the specimen continuously (0°→360°×N turns), so its position
-        # legitimately exceeds ±90°.  Hardware limits on the aux axis are enforced
-        # by the motor controller itself.  Only the pan (specimen rotation range)
-        # needs a soft check at this level.
+        # A degenerate range is a configuration error, not a licence to move
+        # freely. Refuse rather than run unguarded.
+        if pan_hi - pan_lo < 1e-6:
+            raise RuntimeError(
+                f"Pan range is degenerate ([{pan_lo:.1f}°, {pan_hi:.1f}°]) — refusing to "
+                "move pan. Set a real rotation start and end before scanning."
+            )
+
+        if new_pan < pan_lo - 0.5 or new_pan > pan_hi + 0.5:
+            raise RuntimeError(
+                f"Pan soft-limit violation: target {new_pan:.2f}° is outside the "
+                f"configured range [{pan_lo:.1f}°, {pan_hi:.1f}°] "
+                f"(currently at {self.pan_pos_deg:+.2f}°, requested move "
+                f"{delta_pan:+.2f}°). Scan stopped before moving."
+            )
+
+        # Also refuse if we are ALREADY outside the range. That means the tracked
+        # position and the hardware have diverged, or the range was changed under
+        # a parked arm — either way the frame cannot be trusted, and moving on a
+        # bad frame is how the arm reached the background rig in the first place.
+        if self.pan_pos_deg < pan_lo - 0.5 or self.pan_pos_deg > pan_hi + 0.5:
+            raise RuntimeError(
+                f"Pan is already outside the configured range: at "
+                f"{self.pan_pos_deg:+.2f}°, range [{pan_lo:.1f}°, {pan_hi:.1f}°]. "
+                "Home the pan axis before scanning."
+            )
+
+        # Note: tilt/aux is deliberately NOT clamped — the aux axis is a free 360°
+        # rotation of the specimen, so any angle is legal. Hardware limits there
+        # are the motor controller's business.
 
         # Use easing-friendly timing for smoother ramps (calibration-stable motion)
         # Calculation: base (0.5s min) + angular-distance-proportional with 0.04s per degree
@@ -3135,6 +3182,11 @@ class MacroEngine:
 
         self.pan_pos_deg  = new_pan
         self.tilt_pos_deg = new_tilt
+        if self._pos is not None:
+            try:
+                self._pos(new_pan, new_tilt)
+            except Exception as e:
+                logger.warning(f"position write-back failed: {e}")
 
         await asyncio.sleep(session.vibe_delay_s)
 

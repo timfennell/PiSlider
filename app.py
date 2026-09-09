@@ -8817,6 +8817,20 @@ async def websocket_endpoint(websocket: WebSocket):
                             _stop_sony_usb_liveview()
                             await asyncio.sleep(0.5)   # let the thread exit cleanly
 
+                        def _macro_pos_writeback(pan_deg: float, tilt_deg: float):
+                            """Keep the live axis trackers in step with the scan.
+
+                            These are the persisted, authoritative positions: they
+                            survive restarts, feed ps:Rig_Pan_Deg in the sidecars,
+                            and seed the next scan. Before this, a macro scan moved
+                            the arm without ever updating them, so they described
+                            the pre-scan position forever after — which is how the
+                            engine came to believe pan was at 0° while the arm was
+                            physically 82.8° away.
+                            """
+                            pan_axis.current_deg  = pan_deg
+                            tilt_axis.current_deg = tilt_deg
+
                         macro_eng = MacroEngine(
                             hardware        = hw,
                             capture_fn      = macro_capture,
@@ -8824,6 +8838,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             broadcast_fn    = broadcast,
                             drain_fn        = drain_usb_pipeline,
                             bg_fn           = send_bg_command,
+                            pos_fn          = _macro_pos_writeback,
                         )
                         # Sync engine position from live axis trackers.
                         # Use slider_axis.current_steps directly — it accumulates actual GPIO
@@ -8834,6 +8849,14 @@ async def websocket_endpoint(websocket: WebSocket):
                         # mm (50 steps/mm scale) so ×800 gives a value 16× too large.
                         macro_eng.rail_pos_steps = slider_axis.current_steps
                         macro_eng.pan_pos_deg    = pan_axis.current_deg
+                        # Seed tilt too. It was left at the constructor default of
+                        # 0.0, so the first tilt move of every scan was computed
+                        # from a position the arm was not at.
+                        macro_eng.tilt_pos_deg   = tilt_axis.current_deg
+                        logger.info(f"Macro engine seeded from live axes: "
+                                    f"pan={pan_axis.current_deg:+.2f}° "
+                                    f"tilt={tilt_axis.current_deg:+.2f}° "
+                                    f"rail={slider_axis.current_steps} steps")
                         macro_eng.tilt_pos_deg   = tilt_axis.current_deg
 
                         start_mm   = sess.rail_start_steps / STEPS_PER_MM
