@@ -145,6 +145,10 @@ signal.signal(signal.SIGINT,  _signal_handler)
 
 # ─── MACRO ENGINE INSTANCE ────────────────────────────────────────────────────
 _macro_task: Optional[asyncio.Task] = None
+# Module-level handle so a stop can reach the engine even if the websocket
+# that started the scan has gone away. It was previously only a local in the
+# handler, so a reconnected browser could not signal the running engine.
+_macro_eng = None
 
 # ─── BACKGROUND-MATTE PHONE CLIENTS ──────────────────────────────────────────
 # WebSockets from phones connected to /ws/bg for triangulation matting.
@@ -6712,7 +6716,7 @@ async def api_gps():
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    global _active_ws, _macro_task, _cinematic_mode, _cinematic_live_active, _prog_task, _pending_play, _recording, _record_start_time
+    global _active_ws, _macro_task, _macro_eng, _cinematic_mode, _cinematic_live_active, _prog_task, _pending_play, _recording, _record_start_time
     global _last_input_time, _tracker_active, _tracker_roi, _tracker_target_pos, _object_tracking_task, _picam_bg_capture_task
     global _tracker_corners, _tracker_prev_gray_frame, _tracker_bg_corners, _tracker_bg_refresh_counter, _tracker_scene_velocity, _tracker_prev_error
 
@@ -7965,6 +7969,13 @@ async def websocket_endpoint(websocket: WebSocket):
 
             elif cmd == "stop":
                 _was_timelapse_running = state["is_running"]
+                # Cut motion FIRST, before any bookkeeping. emergency_stop()
+                # latches an abort the stepping loop checks every step and drops
+                # the driver enable line, so an in-flight Bresenham move stops
+                # instead of running to completion. stop_all_axes() alone only
+                # stopped PWM waveforms, which the macro/timelapse move path
+                # does not use.
+                hw.emergency_stop()
                 state["stop_event"].set()
                 hw.stop_all_axes()
                 state["is_running"] = False
@@ -8011,6 +8022,10 @@ async def websocket_endpoint(websocket: WebSocket):
             elif cmd == "resume_control":
                 # User confirms it is safe to move after an E-stop.
                 # Cleanly restarts InertiaEngine and clears any residual stop state.
+                # Clearing the latch is what allows the drivers to be energised
+                # again; enable_motors(True) refuses while it is set.
+                hw.clear_estop()
+                hw.enable_motors(True)
                 state["stop_event"].clear()
                 state["is_running"] = False
                 if _inertia:
@@ -8847,6 +8862,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         # current_steps, so both are in the same unit and the delta is correct.
                         # DO NOT use current_mm × STEPS_PER_MM(800): current_mm is in belt-drive
                         # mm (50 steps/mm scale) so ×800 gives a value 16× too large.
+                        _macro_eng = macro_eng
                         macro_eng.rail_pos_steps = slider_axis.current_steps
                         macro_eng.pan_pos_deg    = pan_axis.current_deg
                         # Seed tilt too. It was left at the constructor default of
@@ -8985,6 +9001,15 @@ async def websocket_endpoint(websocket: WebSocket):
                         asyncio.create_task(_run_flats())
 
             elif cmd == "macro_stop":
+                # Cut motion unconditionally, even if the task is already gone.
+                # This used to be gated on _macro_task being alive, so a stop
+                # pressed while the task was wedged did nothing at all.
+                hw.emergency_stop()
+                if _macro_eng is not None:
+                    try:
+                        _macro_eng.stop()
+                    except Exception as e:
+                        logger.warning(f"macro engine stop signal failed: {e}")
                 if _macro_task and not _macro_task.done():
                     # Signal the engine — it will clean up and broadcast macro_done
                     state["stop_event"].set()

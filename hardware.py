@@ -34,6 +34,7 @@ Standalone TMC2209 mode (no UART):
 
 import time
 import logging
+import threading
 import lgpio
 
 logger = logging.getLogger("PiSlider.HW")
@@ -96,6 +97,11 @@ class HardwareController:
         self.gpio_chip_index = gpio_chip_index
         try:
             self.gpio_chip = lgpio.gpiochip_open(gpio_chip_index)
+            # Emergency stop latch. Checked inside the stepping loop on EVERY
+            # step, so a move already in flight aborts rather than running to
+            # completion. threading.Event because the step loop runs in a worker
+            # thread (asyncio.to_thread) while the stop arrives on the event loop.
+            self.estop = threading.Event()
             self._init_gpio()
             self.enable_motors(False)   # Safety: start disabled
             self.inversions = {0: False, 1: False, 2: False}
@@ -225,6 +231,12 @@ class HardwareController:
         Steps are signed (positive = forward direction per DIR pin logic).
         Duration controls overall speed — longer = slower.
         """
+        # Refuse before touching a single pin. A latched E-stop must not even
+        # reclaim STEP pins or set DIR lines.
+        if self.estop.is_set():
+            logger.warning("move_axes_simultaneous refused — emergency stop is latched.")
+            return
+
         s_dir = 1 if slider_steps >= 0 else 0
         p_dir = 1 if pan_steps    >= 0 else 0
         t_dir = 1 if tilt_steps   >= 0 else 0
@@ -314,6 +326,13 @@ class HardwareController:
         timeout_s = duration_s * 2.0 + 5.0
 
         for step_n in range(max_steps):
+            # Emergency stop — checked every step so an in-flight move aborts
+            # immediately instead of running to completion. Event.is_set() is a
+            # cheap attribute read, negligible against the per-step delay.
+            if self.estop.is_set():
+                logger.warning(f"🛑 E-STOP during move: aborted at step {step_n}/{max_steps}")
+                break
+
             # Safety timeout check
             elapsed = time.time() - start_time
             if elapsed > timeout_s:
@@ -356,8 +375,52 @@ class HardwareController:
     # PERIPHERALS
     # -------------------------------------------------------------------------
     def enable_motors(self, enable: bool):
-        """Enable or disable all TMC2209 drivers (EN pin, active LOW)."""
+        """Enable or disable all TMC2209 drivers (EN pin, active LOW).
+
+        Re-enabling is refused while the emergency stop is latched. Without this
+        the very next operation that enables motors (homing, a nudge, the start
+        of another scan) would silently re-arm the machine after an E-stop.
+        """
+        if enable and getattr(self, "estop", None) is not None and self.estop.is_set():
+            logger.warning("enable_motors(True) refused — emergency stop is latched. "
+                           "Call clear_estop() to re-arm.")
+            return
         lgpio.gpio_write(self.gpio_chip, PIN_ENABLE, 0 if enable else 1)
+
+    def emergency_stop(self):
+        """Cut all motion NOW. Safe to call from any thread.
+
+        Order matters: latch first so the stepping loop bails at its next step,
+        then kill the PWM waveforms, then drop the driver enable line. Dropping
+        EN is the part that is genuinely instantaneous and independent of any
+        software loop — it de-energises all three TMC2209s with one GPIO write,
+        so it works even if a thread is wedged.
+
+        The previous stop path called stop_all_axes(), which only stops PWM
+        waveforms. The Bresenham move loop drives the STEP pins with gpio_write
+        and was never PWM, so an in-flight move ran to completion regardless.
+        """
+        try:
+            self.estop.set()
+        except Exception:
+            pass
+        try:
+            for pin in (PIN_SLIDER_STEP, PIN_PAN_STEP, PIN_TILT_STEP):
+                lgpio.tx_pwm(self.gpio_chip, pin, 100, 0)
+            self._axis_speed_cache = {'slider': False, 'pan': False, 'tilt': False}
+        except Exception as e:
+            logger.error(f"E-STOP: stopping waveforms failed: {e}")
+        try:
+            lgpio.gpio_write(self.gpio_chip, PIN_ENABLE, 1)   # active LOW -> 1 disables
+            logger.warning("🛑 EMERGENCY STOP: drivers de-energised, motion halted.")
+        except Exception as e:
+            logger.error(f"E-STOP: could not de-energise drivers: {e}")
+
+    def clear_estop(self):
+        """Re-arm after an emergency stop. Does NOT re-enable the drivers;
+        the caller decides when it is safe to energise again."""
+        self.estop.clear()
+        logger.info("Emergency stop cleared — drivers still disabled until enabled explicitly.")
 
     def set_inversions(self, slider: bool, pan: bool, tilt: bool):
         """Set direction inversion for each axis."""
