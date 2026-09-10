@@ -2142,6 +2142,29 @@ def _sony_usb_liveview_worker():
                 jpeg = result.stdout
 
             if jpeg:
+                # Apply the camera orientation transform, as the PiCam liveview
+                # path already does. Without this the orientation buttons changed
+                # state and rotated the focus loupe while the preview image
+                # itself never turned, which reads as the buttons doing nothing.
+                _orient = state.get("camera_orientation", "landscape")
+                if _orient != "landscape":
+                    try:
+                        _arr = cv2.imdecode(np.frombuffer(jpeg, np.uint8),
+                                            cv2.IMREAD_COLOR)
+                        if _arr is not None:
+                            if _orient == "portrait_cw":
+                                _arr = cv2.rotate(_arr, cv2.ROTATE_90_CLOCKWISE)
+                            elif _orient == "portrait_ccw":
+                                _arr = cv2.rotate(_arr, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                            elif _orient == "inverted":
+                                _arr = cv2.rotate(_arr, cv2.ROTATE_180)
+                            _ok, _buf = cv2.imencode(
+                                ".jpg", _arr, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                            if _ok:
+                                jpeg = _buf.tobytes()
+                    except Exception as _re:
+                        # Never lose the frame over a rotation failure.
+                        logger.debug(f"liveview rotate skipped: {_re}")
                 _sony_last_frame = jpeg
                 _fail_count = 0
                 if _first_frame:
