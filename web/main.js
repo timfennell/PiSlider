@@ -3660,25 +3660,7 @@ function macroCalc() {
     const ttd = document.getElementById('macro_travel_total_mm');
     if (ttd) ttd.value = travelMm > 0 ? travelMm.toFixed(1) : '—';
 
-    // Auto-compute recommended stacks based on coverage area
-    let panRange = 360;  // degrees
-    if (_macroRotMode === 'range' && _macroRotStart !== null && _macroRotEnd !== null) {
-        panRange = Math.abs(_macroRotEnd - _macroRotStart);
-    }
-
-    // Recommended stacks: integrate actual surface area covered, accounting for pan axis tilt.
-    //
-    // The geodesic weight for each tilt row is |cos(tilt_rad + alpha)| where
-    //   alpha = PI/2 - panAxisTilt_rad   (converts UI angle to radians-from-vertical)
-    // The integral over the tilt range gives the true spherical surface area fraction:
-    //   ∫ |cos(φ + alpha)| dφ  from tiltMin to tiltMax
-    //   = |sin(tiltMax_rad + alpha) - sin(tiltMin_rad + alpha)|
-    // Normalised to the full sphere (vertical axis, -90→90 tilt = 2.0):
-    //   coverageFraction = (panRange/360) × |sin(tiltMax_rad + alpha) − sin(tiltMin_rad + alpha)| / 2
-    //
-    // Reference: 72 stacks for full sphere coverage (empirically chosen as minimum for
-    // COLMAP to find sufficient feature overlap). Scales proportionally for partial coverage.
-    // PAN IS LATITUDE, NOT AZIMUTH.
+    // Recommended stacks: PAN IS LATITUDE, NOT AZIMUTH.
     //
     // From the rig kinematics, v = (sin pan, -cos pan sin tilt, -cos pan cos tilt),
     // so pan alone sets v_x. The old model here had the two axes the other way
@@ -3687,14 +3669,12 @@ function macroCalc() {
     // sphere and was scored 50%, while pan 0..360 reaches only 50% (past ±90 pan
     // just repeats latitudes) and was scored 100%.
     //
-    // It also anchored on "72 stacks for a full sphere", which is far too few.
-    // What decides reconstruction is the angle between NEIGHBOURING views;
-    // measured on a real scan, 77% of pairs under 20° apart verified, 17% at
-    // 20-30°, and none past 30°. Even sampling of a band of area A at spacing s
-    // needs N = A/s², so a full sphere at 15° is 183 nodes, not 72.
+    // It also anchored on "72 stacks for a full sphere", an empirical guess that
+    // is far too few. Even sampling of a band of area A at neighbour spacing s
+    // needs N = A/s²; at the 12° target below a full sphere is 287 nodes.
     //
-    // Together those errors under-called by about 5x: a pan -24..+70 scan was
-    // told 19 stacks when 15° spacing over that band needs 123.
+    // Together those errors under-called by roughly 10x: a pan -24..+70 scan was
+    // told 19 stacks when that band needs 193.
     let panLo = -90, panHi = 90;
     if (_macroRotMode === 'range' && _macroRotStart !== null && _macroRotEnd !== null) {
         panLo = Math.min(_macroRotStart, _macroRotEnd);

@@ -709,6 +709,34 @@ def _serpentine_motor_order(kept):
 # spacing, right on the cliff edge, and the match graph came out in 8 pieces.
 
 
+# Target angular distance between neighbouring viewpoints.
+#
+# Set by FEATURE TRACK LENGTH, not by whether image pairs match. COLMAP
+# registers a new image by matching its 2D features against existing 3D points,
+# and a 3D point only exists where a track spans 3+ views — so a scan can match
+# every consecutive pair and still reconstruct nothing.
+#
+# Measured on bee 5, captured at ~17 deg spacing, over its own verified
+# correspondences:
+#
+#     track length 2   4088   94.3%
+#     track length 3    214    4.9%
+#     track length 4     31    0.7%
+#     track length 5+     3    0.1%
+#
+# 248 tracks reaching 3 views across 23 images, ~11 per image, against COLMAP's
+# registration floor of 30. Forcing the reconstruction through with one shared
+# camera and fixed intrinsics gave 4 images and 11 points at mean track length
+# exactly 2.000. A feature reached its neighbour and died before the next one.
+#
+# Matching dies by ~30 deg, so a feature survives roughly 30/s steps: 3-view
+# tracks need s < 15, 4-view need s < 10. 12 buys 3-view tracks with margin.
+#
+# web/main.js carries the same constant for the live readout — it has to compute
+# as the operator types — and the two are checked against each other.
+TARGET_SPACING_DEG = 12.0
+
+
 def pan_band(pan_lo_deg: float, pan_hi_deg: float):
     """Latitude band (u = sin(pan)) a pan range can actually reach, as (u0, u1).
 
@@ -738,8 +766,12 @@ def pan_band(pan_lo_deg: float, pan_hi_deg: float):
 
 
 def helix_node_count(pan_lo_deg: float, pan_hi_deg: float,
-                     spacing_deg: float) -> int:
-    """Nodes needed to sample a pan band at a given neighbour spacing."""
+                     spacing_deg: float = TARGET_SPACING_DEG) -> int:
+    """Nodes needed to sample a pan band at a given neighbour spacing.
+
+    Rounds UP: rounding to nearest leaves the count fractionally over target,
+    so the app's own recommendation would not meet the app's own threshold.
+    """
     u0, u1 = pan_band(pan_lo_deg, pan_hi_deg)
     s = math.radians(max(0.1, spacing_deg))
     return max(1, int(math.ceil(2.0 * math.pi * (u1 - u0) / (s * s))))
@@ -2634,6 +2666,30 @@ class MacroEngine:
         logger.info(f"  Rail: {session.rail_start_steps}→{session.rail_end_steps} steps (≈{start_mm:.1f}→{end_mm:.1f}mm, {travel_steps} steps / ≈{travel_mm:.1f}mm travel)")
         logger.info(f"  Images/Stack: {session.images_per_stack} | Stacks: {session.num_stacks}")
         logger.info(f"  Total Frames: {session.num_stacks * session.images_per_stack}")
+
+        # Warn before the shutter moves, not after the reconstruction fails.
+        # Under-sampling costs a whole scan: bee 5 ran 3 hours of capture and a
+        # further 3 of matting and stacking before COLMAP could say it was
+        # unusable. The UI shows this figure live, but the UI can be bypassed
+        # and an old browser tab can be stale, so check it here too.
+        if session.aux_enabled and session.num_stacks > 0:
+            spacing = helix_spacing_deg(session.rotation_start_deg,
+                                        session.rotation_end_deg,
+                                        session.num_stacks)
+            want = helix_node_count(session.rotation_start_deg,
+                                    session.rotation_end_deg)
+            logger.info(f"  Node spacing: ≈{spacing:.1f}° "
+                        f"(target ≤{TARGET_SPACING_DEG:.0f}° needs {want} stacks)")
+            if spacing > TARGET_SPACING_DEG:
+                sev = "✗" if spacing > 20.0 else "⚠"
+                detail = ("features will not survive two steps, so tracks stay "
+                          "2 views long and COLMAP cannot register a third image"
+                          if spacing > 20.0 else
+                          "3-view feature tracks will be thin")
+                msg = (f"{sev} Node spacing ≈{spacing:.1f}° exceeds the {TARGET_SPACING_DEG:.0f}° "
+                       f"target — {detail}. {want} stacks would reach the target.")
+                logger.warning(f"  {msg}")
+                await self._broadcast({"type": "log", "msg": msg})
 
         # Log what actually decides the path shape. Diagnosing a scan that came
         # out as a single flat ring took reading the whole planned node list,
