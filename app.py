@@ -42,7 +42,7 @@ import cv2
 import numpy as np
 from pathlib import Path
 from typing import Optional, Tuple
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Request, HTTPException
 from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -10148,7 +10148,6 @@ async def get_thumb(frame_id: str):
         return FileResponse(thumb_path, media_type="image/jpeg",
                             headers={"Cache-Control": "public, max-age=31536000"})
     # Thumb not found — return 404 so browser doesn't cache the miss
-    from fastapi import HTTPException
     raise HTTPException(status_code=404, detail="Thumb not ready yet")
 
 
