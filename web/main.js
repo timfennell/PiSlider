@@ -3711,8 +3711,20 @@ function macroCalc() {
     const bandArea = 2 * Math.PI * uSpan;                 // steradians
     const coverageFraction = uSpan / 2;                   // of the whole sphere
 
-    // Nodes for 15°, comfortably inside the measured matching window.
-    const TARGET_SPACING_DEG = 15;
+    // Target 12°, set by TRACK LENGTH rather than by pair matching.
+    //
+    // A pair matching is not enough. COLMAP registers a new image by matching
+    // its 2D features against existing 3D points, and a 3D point only exists
+    // where a feature track spans 3+ views. Measured on bee 5 at 17° spacing:
+    // 94.3% of tracks were length 2, only 248 reached length 3 across all 23
+    // images — about 11 per image against a registration floor of 30. The
+    // reconstruction produced 4 images and 11 points with mean track length
+    // exactly 2.000, which is what that failure looks like from the inside.
+    //
+    // Matching dies by ~30°, so a feature survives roughly 30/s steps. Length-3
+    // tracks need 2s < 30 (s < 15), length-4 need 3s < 30 (s < 10). 12° buys
+    // solid 3-view tracks with margin.
+    const TARGET_SPACING_DEG = 12;
     const sRad = TARGET_SPACING_DEG * Math.PI / 180;
     // ceil, not round: rounding down leaves the recommended count fractionally
     // over the target spacing, so the app's own advice reads as 'usable'.
@@ -3726,16 +3738,17 @@ function macroCalc() {
     if (sd) {
         if (numStacks > 0 && uSpan > 0) {
             const spacing = Math.sqrt(bandArea / numStacks) * 180 / Math.PI;
+            // Thresholds are track-length boundaries, not pair-matching ones.
             let colour = 'var(--accent-teal)', note = '';
-            if (spacing > 30)      { colour = '#ff5c5c'; note = ' — will not match'; }
-            else if (spacing > 20) { colour = '#ffb020'; note = ' — marginal'; }
-            else if (spacing > 15) { colour = '#ffd24a'; note = ' — usable'; }
+            if (spacing > 20)      { colour = '#ff5c5c'; note = ' — will not build'; }
+            else if (spacing > 15) { colour = '#ffb020'; note = ' — 2-view tracks only'; }
+            else if (spacing > 12) { colour = '#ffd24a'; note = ' — thin 3-view tracks'; }
             else                   { note = ' — good'; }
             sd.style.color = colour;
             sd.innerHTML = `${spacing.toFixed(1)}°${note}<br>` +
                 `<span style="font-size:0.7rem;color:var(--text-dim)">` +
                 `covers ${(coverageFraction * 100).toFixed(0)}% of sphere · ` +
-                `${recommendedStacks} for 15°</span>`;
+                `${recommendedStacks} for 12°</span>`;
         } else {
             sd.innerHTML = '—';
         }
