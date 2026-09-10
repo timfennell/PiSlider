@@ -36,6 +36,7 @@ import logging
 import signal
 import atexit
 import subprocess
+import threading as _threading
 import shutil
 import requests
 import cv2
@@ -1702,6 +1703,53 @@ def _iso_native_high_for_model(model: str) -> int:
     return 0
 
 
+
+# ── Camera bus ────────────────────────────────────────────────────────────────
+#
+# ONE gphoto2 process at a time, across the whole app.
+#
+# There is a single USB interface to a single camera, but eleven functions were
+# each spawning their own gphoto2 whenever they felt like it — detect, settings,
+# liveview, capture, calibration, the HG query. Whichever one lost the race got
+#
+#   *** Error (-53: 'Could not claim the USB device') ***
+#
+# 171 of those in one scan. Worse, a losing capture does not fail fast: it sits
+# in gphoto2's retry path until the caller's timeout, which is how every frame
+# came to take 45 s instead of 1 s.
+#
+# _drain() already served the macro loop, but it only knew about the macro
+# loop's own download. Anything else touching the camera was invisible to it.
+# A lock is the honest expression of the constraint: the bus has one owner.
+#
+# Acquisition is bounded. If the bus cannot be had in time we raise rather than
+# block forever, and the message names the current holder — a wedged holder
+# should be diagnosable, not a mystery hang.
+_CAMERA_LOCK = _threading.Lock()
+_CAMERA_BUS_OWNER: Optional[str] = None
+
+
+def _gp_run(args, _bus_wait: float = 90.0, _bus_why: str = "", **kw):
+    """subprocess.run for gphoto2, serialised on the camera bus."""
+    global _CAMERA_BUS_OWNER
+    why = _bus_why or " ".join(str(a) for a in args[1:4])
+    if not _CAMERA_LOCK.acquire(timeout=_bus_wait):
+        raise RuntimeError(
+            f"camera bus busy for {_bus_wait:.0f}s — held by {_CAMERA_BUS_OWNER!r}, "
+            f"wanted for {why!r}")
+    _CAMERA_BUS_OWNER = why
+    try:
+        return subprocess.run(args, **kw)
+    finally:
+        _CAMERA_BUS_OWNER = None
+        _CAMERA_LOCK.release()
+
+
+def camera_bus_owner() -> Optional[str]:
+    """Whoever currently holds the camera, or None. For diagnostics."""
+    return _CAMERA_BUS_OWNER
+
+
 def detect_sony_usb() -> dict:
     """Run gphoto2 --auto-detect and return first Sony camera found.
     Returns {"found": bool, "model": str, "port": str, "iso_native_high": int}.
@@ -1712,7 +1760,7 @@ def detect_sony_usb() -> dict:
     SD card inserted provided "Release w/o Card" is enabled in its menu.
     """
     try:
-        res = subprocess.run(
+        res = _gp_run(
             ["gphoto2", "--auto-detect"],
             capture_output=True, text=True, timeout=10
         )
@@ -1728,7 +1776,7 @@ def detect_sony_usb() -> dict:
                 # SD card — files go directly to the Pi via USB download.
                 # Silently ignore errors (older firmware may not support this).
                 try:
-                    subprocess.run(
+                    _gp_run(
                         ["gphoto2", "--set-config", "capturetarget=0"],
                         capture_output=True, text=True, timeout=8
                     )
@@ -1848,7 +1896,8 @@ def set_sony_settings_usb(ae: bool, awb: bool, shutter_s: float, iso: int, kelvi
                 "--set-config", "whitebalance=CT",
                 "--set-config", f"colortemperature={kelvin}",
             ]
-        result = subprocess.run(args, capture_output=True, text=True, timeout=10)
+        result = _gp_run(args, capture_output=True, text=True, timeout=10,
+                         _bus_why="set_sony_settings_usb")
         if result.returncode != 0:
             logger.warning(f"set_sony_settings_usb: {result.stderr.strip()}")
     except Exception as exc:
@@ -2098,7 +2147,7 @@ def _sony_usb_liveview_worker():
     # Enable viewfinder so the A7III starts streaming preview data.
     # Best-effort — some firmware versions don't expose this config.
     try:
-        subprocess.run(
+        _gp_run(
             ["gphoto2", "--set-config", "viewfinder=1"],
             capture_output=True, timeout=6
         )
@@ -2122,7 +2171,7 @@ def _sony_usb_liveview_worker():
                 pass
 
             # No --filename: this build writes capture_preview.jpg in CWD
-            result = subprocess.run(
+            result = _gp_run(
                 ["gphoto2", "--capture-preview", "--force-overwrite"],
                 capture_output=True, timeout=8,
                 cwd=_PREVIEW_CWD
@@ -2200,7 +2249,7 @@ def _sony_usb_liveview_worker():
                 if _fail_count == 5:
                     logger.info("Sony USB liveview: re-enabling viewfinder after failures")
                     try:
-                        subprocess.run(
+                        _gp_run(
                             ["gphoto2", "--set-config", "viewfinder=1"],
                             capture_output=True, timeout=6
                         )
@@ -2219,7 +2268,7 @@ def _sony_usb_liveview_worker():
 
     # Disable viewfinder on clean stop to let camera sleep
     try:
-        subprocess.run(
+        _gp_run(
             ["gphoto2", "--set-config", "viewfinder=0"],
             capture_output=True, timeout=6
         )
@@ -3685,7 +3734,7 @@ def capture_sony_usb_to(dest: str, shutter_s: float = 0.0) -> Optional[str]:
         if use_bulb:
             bulb_secs = max(1, int(round(shutter_s)))
             t_start   = _time.monotonic()
-            subprocess.run(
+            _gp_run(
                 ["gphoto2",
                  "--set-config", "expprogram=M",
                  "--set-config", "shutterspeed=bulb",
@@ -3698,7 +3747,7 @@ def capture_sony_usb_to(dest: str, shutter_s: float = 0.0) -> Optional[str]:
             if shutter_s > 0 and actual > 0:
                 state["_bulb_ev_error"] = math.log2(actual / shutter_s)
         else:
-            subprocess.run(
+            _gp_run(
                 ["gphoto2",
                  "--capture-image-and-download",
                  "--filename", dest, "--force-overwrite"],
@@ -3737,7 +3786,7 @@ def capture_sony_usb(frame_id: str, shutter_s: float = 0.0) -> Optional[str]:
         if use_bulb:
             bulb_secs = max(1, int(round(shutter_s)))
             t_start   = _time.monotonic()
-            subprocess.run(
+            _gp_run(
                 ["gphoto2",
                  "--set-config", "expprogram=M",
                  "--set-config", "shutterspeed=bulb",
@@ -3750,7 +3799,7 @@ def capture_sony_usb(frame_id: str, shutter_s: float = 0.0) -> Optional[str]:
             if shutter_s > 0 and actual > 0:
                 state["_bulb_ev_error"] = math.log2(actual / shutter_s)
         else:
-            subprocess.run(
+            _gp_run(
                 ["gphoto2",
                  "--capture-image-and-download",
                  "--filename", dest, "--force-overwrite"],
@@ -3780,7 +3829,7 @@ def capture_sony_usb(frame_id: str, shutter_s: float = 0.0) -> Optional[str]:
                 # Trigger shutter without downloading — file saves to camera SD card
                 if use_bulb:
                     bulb_secs = max(1, int(round(shutter_s)))
-                    subprocess.run(
+                    _gp_run(
                         ["gphoto2",
                          "--set-config", "expprogram=M",
                          "--set-config", "shutterspeed=bulb",
@@ -3789,7 +3838,7 @@ def capture_sony_usb(frame_id: str, shutter_s: float = 0.0) -> Optional[str]:
                         check=True, capture_output=True, text=True,
                         timeout=bulb_secs + 30)
                 else:
-                    subprocess.run(
+                    _gp_run(
                         ["gphoto2", "--capture-image"],
                         check=True, capture_output=True, text=True,
                         timeout=max(30, int(shutter_s) + 15))
@@ -3867,7 +3916,7 @@ def hg_calibration_shot_usb() -> Optional[float]:
 
     # Switch camera to Program Auto + AWB for AE measurement
     try:
-        subprocess.run(
+        _gp_run(
             ["gphoto2", "--set-config", "expprogram=P",
              "--set-config", "whitebalance=Automatic"],
             capture_output=True, text=True, timeout=10)
@@ -3879,7 +3928,7 @@ def hg_calibration_shot_usb() -> Optional[float]:
     os.makedirs(cal_dir, exist_ok=True)
     cal_path = os.path.join(cal_dir, "cal_ae.ARW")
     try:
-        subprocess.run(
+        _gp_run(
             ["gphoto2",
              "--capture-image-and-download",
              "--filename", cal_path, "--force-overwrite"],
@@ -7633,7 +7682,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 try:
                     if cam == "sony_usb":
                         def _query_usb():
-                            r = subprocess.run(
+                            r = _gp_run(
                                 ["gphoto2",
                                  "--get-config", "shutterspeed",
                                  "--get-config", "iso",
@@ -8897,6 +8946,20 @@ async def websocket_endpoint(websocket: WebSocket):
                               "Use the folder picker to choose a destination before starting."})
                 else:
                     try:
+                        # Live view competes with the scan for the one camera.
+                        # It is not wanted during a run — the graph flipbook
+                        # shows the latest captures instead — and leaving it on
+                        # means its preview process holds the USB interface for
+                        # up to 8 s at a time while the capture loop waits.
+                        global _sony_liveview_running
+                        if _sony_liveview_running:
+                            _sony_liveview_running = False
+                            logger.info("Macro start: stopping Sony liveview "
+                                        "so the scan owns the camera.")
+                            await websocket.send_json({"type":"log",
+                                "msg":"Live view stopped — the scan needs the camera. "
+                                      "Latest captures still appear in the scan graph."})
+                            await asyncio.sleep(1.2)   # let the worker exit its loop
                         logger.info("Building macro session...")
                         sess = _build_macro_session(msg)
                         logger.info(f"Session built: scan_type={sess.scan_type}, num_stacks={sess.num_stacks}")
