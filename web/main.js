@@ -3922,6 +3922,8 @@ function macroStart() {
         rotation_start_deg: _macroRotStart ?? 0,
         rotation_end_deg: _macroRotEnd ?? 360,
         num_stacks: parseInt(document.getElementById('macro_num_stacks')?.value || 36),
+        // 0 = fresh orbit. N = skip the first N stacks (resume after an interruption).
+        resume_from_stack: parseInt(document.getElementById('macro_resume_from')?.value || 0),
         rotation_easing: document.getElementById('macro_rotation_easing')?.value || 'even',
         rotation_axis_angle_deg: parseFloat(document.getElementById('macro_rot_axis_angle')?.value || 90),
         rotation_axis_description: document.getElementById('macro_rot_axis_desc')?.value || 'vertical',

@@ -8949,10 +8949,23 @@ async def websocket_endpoint(websocket: WebSocket):
                                    f"{sess.images_per_stack} images, {sess.step_increment_steps}-step increments)")
                         logger.info(f"Pan/Tilt initial positions: pan={pan_axis.current_deg:.1f}° tilt={tilt_axis.current_deg:.1f}°")
 
+                        # Resume support. The engine has always accepted
+                        # resume_from_stack ("0 = fresh start, N = skip first N
+                        # stacks") but app.py only ever called run(sess), so the
+                        # capability was unreachable: any interruption meant
+                        # re-shooting the whole orbit.
+                        _resume_from = max(0, int(msg.get("resume_from_stack", 0)))
+                        if _resume_from > 0:
+                            logger.info(f"Macro RESUME: skipping the first {_resume_from} "
+                                        f"stack(s), shooting {_resume_from}..{sess.num_stacks-1}")
+                            await broadcast({"type": "log",
+                                "msg": f"▶ Resuming from stack {_resume_from+1}/{sess.num_stacks} "
+                                       f"— earlier stacks left untouched."})
+
                         async def _macro_run():
                             try:
                                 logger.info("Macro run started, calling macro_eng.run()...")
-                                await macro_eng.run(sess)
+                                await macro_eng.run(sess, resume_from_stack=_resume_from)
                                 logger.info("Macro run completed successfully")
                             except (FileNotFoundError, PermissionError, OSError) as e:
                                 # Path/filesystem errors

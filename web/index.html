@@ -1510,6 +1510,10 @@
                         <label>Num Stacks</label>
                         <input type="number" id="macro_num_stacks" value="36" step="1" min="1" oninput="macroCalc()">
                     </div>
+                    <div class="control-item half">
+                        <label title="0 = shoot the whole orbit. N = skip the first N stacks and shoot from stack N+1 onward, leaving earlier stacks on disk untouched. Use after an interruption so you do not re-shoot what is already good.">Resume from stack</label>
+                        <input type="number" id="macro_resume_from" value="0" step="1" min="0">
+                    </div>
                     <div style="flex:1; display:flex; flex-direction:column; justify-content:flex-end; padding-bottom:6px;">
                         <div style="font-size:0.68rem; color:var(--text-dim);">
                             Recommended: <span id="macro_recommended_stacks" style="color:var(--accent-teal);">36</span>
