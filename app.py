@@ -1745,6 +1745,21 @@ def _gp_run(args, _bus_wait: float = 90.0, _bus_why: str = "", **kw):
         _CAMERA_LOCK.release()
 
 
+def stop_sony_liveview() -> bool:
+    """Signal the Sony liveview worker to exit. True if it was running.
+
+    Module level on purpose. Callers inside the websocket handler cannot touch
+    the flag directly: that function is thousands of lines long and already
+    declares this global late in its body, so an earlier assignment turns the
+    whole file into a SyntaxError at import — which is exactly how the service
+    ended up crash-looping.
+    """
+    global _sony_liveview_running
+    was = bool(_sony_liveview_running)
+    _sony_liveview_running = False
+    return was
+
+
 def camera_bus_owner() -> Optional[str]:
     """Whoever currently holds the camera, or None. For diagnostics."""
     return _CAMERA_BUS_OWNER
@@ -8951,9 +8966,13 @@ async def websocket_endpoint(websocket: WebSocket):
                         # shows the latest captures instead — and leaving it on
                         # means its preview process holds the USB interface for
                         # up to 8 s at a time while the capture loop waits.
-                        global _sony_liveview_running
-                        if _sony_liveview_running:
-                            _sony_liveview_running = False
+                        #
+                        # Done through a helper rather than assigning the module
+                        # global here: this websocket handler is one enormous
+                        # function that already declares that global further
+                        # down, and Python rejects a `global` that follows an
+                        # earlier use of the name in the same scope.
+                        if stop_sony_liveview():
                             logger.info("Macro start: stopping Sony liveview "
                                         "so the scan owns the camera.")
                             await websocket.send_json({"type":"log",
