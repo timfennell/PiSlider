@@ -4110,6 +4110,58 @@ function captureFlats() {
 // ─── Resume an interrupted scan ─────────────────────────────────────────────────
 let _resumePreset = null;      // the recorded path, when resuming
 
+// Restore capture settings from a project's sequence.json.
+//
+// Everything needed is already recorded when a scan runs — the rail range in
+// STEPS, the frame count, the stack count, the pan range and the axis angle —
+// and macroCheckFolder already receives it. It was being read only for the
+// resume point and then thrown away, so re-running a project meant re-marking
+// the rail by hand. A scan was lost to exactly that: rail start and end both
+// sat at 8960 steps, every frame fired at identical focus, and 40 frames per
+// stack stacked to nothing.
+//
+// Deliberately does NOT touch the exposure slots. The endpoint returns only
+// their labels, so restoring them would be guesswork dressed up as recall.
+let _restorePreset = null;
+
+function macroRestoreSettings() {
+    const o = _restorePreset;
+    if (!o) { log('No project settings to restore.'); return; }
+    const done = [];
+    const setDisp = (id, txt) => { const e = document.getElementById(id); if (e) e.innerText = txt; };
+    const setVal  = (id, v)   => { const e = document.getElementById(id); if (e) e.value = v; };
+
+    const rail = o.rail || {};
+    if (rail.start_steps != null && rail.end_steps != null) {
+        _macroRailStartSteps = rail.start_steps;
+        _macroRailEndSteps   = rail.end_steps;
+        const mmPerStep = 1 / 800;      // STEPS_PER_MM
+        _macroRailStart = rail.start_steps * mmPerStep;
+        _macroRailEnd   = rail.end_steps   * mmPerStep;
+        setDisp('macro_rail_start_disp', _macroRailStart.toFixed(3));
+        setDisp('macro_rail_end_disp',   _macroRailEnd.toFixed(3));
+        setDisp('macro_rail_travel_disp', Math.abs(_macroRailEnd - _macroRailStart).toFixed(3));
+        const travel = Math.abs(rail.end_steps - rail.start_steps);
+        done.push(`rail ${rail.start_steps}→${rail.end_steps} steps` +
+                  (travel === 0 ? '  ⚠ ZERO TRAVEL — the focus will not step' : ''));
+    }
+    if (rail.frame_count) { setVal('macro_images_per_stack', rail.frame_count); done.push(`${rail.frame_count} frames/stack`); }
+    if (o.total)          { setVal('macro_num_stacks', o.total);               done.push(`${o.total} stacks`); }
+    if (o.pan_axis_tilt_deg != null) { setVal('macro_rot_axis_angle', o.pan_axis_tilt_deg); done.push(`axis ${o.pan_axis_tilt_deg}°`); }
+
+    const ang = o.angles_deg || [];
+    if (ang.length) {
+        _macroRotStart = Math.min.apply(null, ang);
+        _macroRotEnd   = Math.max.apply(null, ang);
+        _macroRotMode  = 'range';
+        setDisp('macro_rot_start_disp', _macroRotStart.toFixed(1));
+        setDisp('macro_rot_end_disp',   _macroRotEnd.toFixed(1));
+        done.push(`pan ${_macroRotStart.toFixed(1)}°..${_macroRotEnd.toFixed(1)}°`);
+    }
+    if (typeof macroCalc === 'function') macroCalc();
+    log('Restored from project: ' + (done.length ? done.join(', ') : 'nothing recorded'));
+}
+
 async function macroCheckFolder(showWhenClean) {
     const path = document.getElementById('save_path')?.value;
     const el   = document.getElementById('macro_resume_status');
@@ -4124,10 +4176,22 @@ async function macroCheckFolder(showWhenClean) {
         return;
     }
     _resumePreset = null;
+    // Settings can be restored from ANY recorded orbit, finished or not — the
+    // endpoint returns every orbit with its rail range, counts and angles. A
+    // completed project is exactly when you want to re-run the same setup, so
+    // fall back to the most recent orbit when there is nothing to resume.
+    _restorePreset = d.resumable || ((d.orbits && d.orbits.length) ? d.orbits[d.orbits.length - 1] : null);
+    const _restoreBtn = _restorePreset
+        ? '<br><button onclick="macroRestoreSettings()" style="margin-top:6px;padding:4px 10px;'
+          + 'font-size:0.7rem;background:var(--panel-dark);border:var(--border);'
+          + 'color:var(--accent-teal);border-radius:4px;cursor:pointer">'
+          + '\u21ba Restore capture settings from this project</button>'
+        : '';
     if (!d.found || !d.resumable) {
         if (el) {
-            el.textContent = d.found ? 'Project found — all orbits complete.'
-                                     : (showWhenClean ? 'No interrupted scan here — a fresh orbit will be shot.' : '');
+            el.innerHTML = (d.found ? 'Project found — all orbits complete.'
+                                    : (showWhenClean ? 'No interrupted scan here — a fresh orbit will be shot.' : ''))
+                           + _restoreBtn;
             el.style.color = 'var(--text-dim)';
         }
         const f = document.getElementById('macro_resume_from');
@@ -4144,7 +4208,7 @@ async function macroCheckFolder(showWhenClean) {
             '. Earlier stacks are left untouched.' +
             '<br><span style="opacity:.75">Recorded path replayed (' +
             (o.angles_deg ? o.angles_deg.length : 0) + ' positions), so the continued ' +
-            'stacks line up with the completed ones.</span>';
+            'stacks line up with the completed ones.</span>' + _restoreBtn;
         el.style.color = 'var(--accent-teal)';
     }
 }
