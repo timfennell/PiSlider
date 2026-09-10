@@ -2221,6 +2221,27 @@ def _start_sony_usb_liveview():
     global _sony_usb_liveview_running, _sony_usb_liveview_thread
     if _sony_usb_liveview_running:
         return
+
+    # The running flag is not enough on its own. _stop_sony_usb_liveview()
+    # clears it and returns immediately, but the worker can still be parked
+    # inside `subprocess.run(..., timeout=8)` and will not notice for up to
+    # eight seconds — measured 11s between "stop requested" and "stopped".
+    # Starting inside that window passes the flag check and leaves TWO workers
+    # alive, each spawning `gphoto2 --capture-preview`, each unable to claim
+    # USB interface 0 because the other holds it. That presents as a liveview
+    # that never produces a frame while the log fills with -53 errors, and it
+    # is self-inflicted: sampled on the rig, two preview processes were alive
+    # at every check.
+    _prev = _sony_usb_liveview_thread
+    if _prev is not None and _prev.is_alive():
+        logger.info("Sony USB liveview: waiting for previous worker to exit…")
+        _prev.join(timeout=12.0)
+        if _prev.is_alive():
+            logger.warning(
+                "Sony USB liveview: previous worker still alive after 12s — "
+                "refusing to start a second one (would contend for the camera).")
+            return
+
     import threading as _th
     _sony_usb_liveview_running = True
     _sony_usb_liveview_thread = _th.Thread(
@@ -2234,6 +2255,19 @@ def _stop_sony_usb_liveview():
     _sony_usb_liveview_running = False
     _sony_last_frame = None
     logger.info("Sony USB liveview worker: stop requested")
+
+    # Cut short the preview subprocess the worker is parked in, so the flag is
+    # seen now rather than up to 8 seconds from now. Without this a stop takes
+    # ~11s to land, which is both a sluggish handover to a capture sequence and
+    # the window in which a restart used to spawn a duplicate worker.
+    #
+    # Targeted at `--capture-preview` specifically: an in-flight
+    # `--capture-image-and-download` is a real capture and must not be killed.
+    try:
+        subprocess.run(["pkill", "-f", "gphoto2 --capture-preview"],
+                       capture_output=True, timeout=3)
+    except Exception as e:
+        logger.debug(f"liveview preview pkill skipped: {e}")
 
 
 def _restart_cinematic_liveview():
