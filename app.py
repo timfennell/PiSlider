@@ -149,6 +149,8 @@ _macro_task: Optional[asyncio.Task] = None
 # that started the scan has gone away. It was previously only a local in the
 # handler, so a reconnected browser could not signal the running engine.
 _macro_eng = None
+import time as _time
+_last_pos_save: float = 0.0   # throttle for position persistence during a scan
 
 # ─── BACKGROUND-MATTE PHONE CLIENTS ──────────────────────────────────────────
 # WebSockets from phones connected to /ws/bg for triangulation matting.
@@ -8905,6 +8907,27 @@ async def websocket_endpoint(websocket: WebSocket):
                             tilt_axis.current_deg = tilt_deg
                             if rail_steps is not None:
                                 slider_axis.current_steps = int(rail_steps)
+
+                            # Persist it. Updating the in-memory trackers is not
+                            # enough: every save_session() call site is a UI or
+                            # config event, so nothing wrote position during a
+                            # scan and the file went stale the moment one began.
+                            # After hours of motion the saved position described
+                            # wherever the rig was when a setting was last
+                            # touched — worthless for recovering from a power
+                            # cut mid-scan, which is exactly when it is needed.
+                            #
+                            # Throttled: a stack fires this once per rotation
+                            # move plus once per rail move, and a 76x45 orbit
+                            # would otherwise rewrite a 3KB file ~10,000 times.
+                            global _last_pos_save
+                            _now = _time.monotonic()
+                            if _now - _last_pos_save >= 2.0:
+                                _last_pos_save = _now
+                                try:
+                                    save_session()
+                                except Exception as _e:
+                                    logger.debug(f"position save skipped: {_e}")
 
                         macro_eng = MacroEngine(
                             hardware        = hw,
