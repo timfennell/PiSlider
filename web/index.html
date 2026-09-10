@@ -579,7 +579,21 @@
                         </div>
                     </div>
 
-                    <!-- ── Step 2: Soft Limits ── -->
+                    <!-- ── Step 2: Soft Limits ──
+                         Cinematic/timelapse only. A macro scan never consults
+                         these: macro_engine references _soft_guard zero times,
+                         hardware.py has no soft_min/soft_max enforcement, and
+                         _move_rotation takes its pan limits straight from the
+                         scan's own rotation_start_deg/rotation_end_deg. Shown
+                         in macro mode it reads as a required setup step that
+                         gates the scan, which it does not. -->
+                    <div id="rigMacroLimitNote" style="display:none; font-size:0.68rem;
+                         color:var(--text-muted); margin-bottom:6px; line-height:1.5;">
+                        <b style="color:var(--accent-teal);">Not used in macro scans.</b>
+                        The pan Start/End you mark for the scan are the travel limits —
+                        the scan cannot move outside them. Rail Start/End set the focus range.
+                    </div>
+                    <div id="rigSoftLimitsBlock">
                     <div style="font-size:0.68rem; color:var(--text-muted); margin-bottom:6px;">
                         <b style="color:var(--text-dim);">Step 2 — Soft Limits</b>
                         &nbsp;— jog to furthest safe position, press Set.
@@ -654,6 +668,7 @@
                     Pan: —° → —° &nbsp;|&nbsp; Tilt: —° → —°
                 </div>
 
+                    </div><!-- /rigSoftLimitsBlock -->
                 <!-- Motor Driver Steps — collapsible, collapsed by default -->
                 <details style="margin-top:10px;">
                     <summary style="font-size:0.72rem; color:var(--text-dim); cursor:pointer;

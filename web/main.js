@@ -640,6 +640,19 @@ function _applyModeUI(mode) {
 
     // Panel visibility
     els.macroPanel.style.display = isMacro ? 'block' : 'none';
+
+    // Rig Setup Step 2 governs cinematic/timelapse motion only. A macro scan
+    // never consults it — macro_engine references _soft_guard zero times,
+    // hardware.py enforces no soft_min/soft_max, and _move_rotation takes its
+    // pan limits from the scan's own rotation_start_deg/rotation_end_deg. Left
+    // visible it reads as a required setup step gating the scan, and the
+    // CRAWL ONLY / HALF SPEED badge implies a throttle that is not applied.
+    const _softBlock = document.getElementById('rigSoftLimitsBlock');
+    const _softNote  = document.getElementById('rigMacroLimitNote');
+    const _speedBadge = document.getElementById('side_speed_badge');
+    if (_softBlock) _softBlock.style.display = isMacro ? 'none' : '';
+    if (_softNote)  _softNote.style.display  = isMacro ? 'block' : 'none';
+    if (_speedBadge) _speedBadge.style.display = isMacro ? 'none' : '';
     const cp = document.getElementById('cinematic_panel');
     if (cp) cp.style.display = isCinematic ? 'block' : 'none';
 
