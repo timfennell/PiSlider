@@ -2238,6 +2238,11 @@ class MacroEngine:
         # scan all describe where the arm was before this scan started.
         self._pos         = pos_fn
         self._bg_baseline = None   # R/B of the matting background, set on first capture
+        # A pause is nearly always a reaction to something being wrong, so the
+        # frames already shot in the current stack are suspect. On resume the
+        # stack restarts from frame 1 by default; set False to continue mid-stack.
+        self.redo_stack_on_resume = True
+        self._redo_stack  = False
         self._stop_event  = asyncio.Event()
         # Set = running. Cleared = paused. A pause holds the loop at a frame
         # boundary rather than mid-capture, so no motor moves and no partial
@@ -2291,6 +2296,8 @@ class MacroEngine:
             await asyncio.sleep(0.2)
         logger.info("▶ Resuming")
         await self._broadcast({"type": "log", "msg": "▶ Resumed."})
+        if self.redo_stack_on_resume:
+            self._redo_stack = True
         return True
 
     def get_resume_info(self) -> Optional[Dict]:
@@ -2715,7 +2722,8 @@ class MacroEngine:
 
             stack_preview_jpgs: list = []   # JPEG previews collected during this stack
 
-            for frame_idx in range(frames_per_stack):
+            frame_idx = 0
+            while frame_idx < frames_per_stack:
                 if self._stop_event.is_set():
                     break
                 # Pause at the frame boundary too, not just between stacks: a
@@ -2723,6 +2731,21 @@ class MacroEngine:
                 # pause to take effect when something is going wrong.
                 if not await self._wait_if_paused():
                     break
+
+                # Resuming from a pause restarts this stack from its first frame.
+                # A pause is a reaction to something being wrong, so whatever was
+                # already captured in this stack is suspect; keeping it would bake
+                # the problem into the fused result. The rail is somewhere mid-sweep
+                # at this point, so it goes back to the start before reshooting.
+                if self._redo_stack:
+                    self._redo_stack = False
+                    logger.info(f"↻ Reshooting stack {stack_idx+1} from frame 1 after pause")
+                    await self._broadcast({"type": "log",
+                        "msg": f"↻ Reshooting stack {stack_idx+1} from the first frame "
+                               f"— frames captured before the pause are overwritten."})
+                    await self._rail_to(session.rail_start_steps, session, fast=True)
+                    frame_idx = 0
+                    continue
 
                 target_mm    = float(traj_rail[frame_idx])
                 target_steps = int(target_mm * STEPS_PER_MM)
@@ -2846,6 +2869,10 @@ class MacroEngine:
                                f"[{slot.label}]"
                     })
 
+
+                # while-loop: the for-loop's implicit increment is gone, and a
+                # missed increment here is an infinite loop that never captures.
+                frame_idx += 1
             # ── 5. Flush pipelined downloads (sony_usb) ───────────────────────
             # The last frame's download runs in the background; ensure it lands
             # on the Pi before moving to the next stack position.
@@ -3017,7 +3044,8 @@ class MacroEngine:
                        f"{frames_per_stack} images, {travel_mm:.2f}mm travel, "
                        f"{step_mm_each*1000:.1f}µm/step, {move_duration:.2f}s/move")
 
-            for frame_idx in range(frames_per_stack):
+            frame_idx = 0
+            while frame_idx < frames_per_stack:
                 if self._stop_event.is_set():
                     break
                 # Pause at the frame boundary too, not just between stacks: a
@@ -3025,6 +3053,21 @@ class MacroEngine:
                 # pause to take effect when something is going wrong.
                 if not await self._wait_if_paused():
                     break
+
+                # Resuming from a pause restarts this stack from its first frame.
+                # A pause is a reaction to something being wrong, so whatever was
+                # already captured in this stack is suspect; keeping it would bake
+                # the problem into the fused result. The rail is somewhere mid-sweep
+                # at this point, so it goes back to the start before reshooting.
+                if self._redo_stack:
+                    self._redo_stack = False
+                    logger.info(f"↻ Reshooting stack {stack_idx+1} from frame 1 after pause")
+                    await self._broadcast({"type": "log",
+                        "msg": f"↻ Reshooting stack {stack_idx+1} from the first frame "
+                               f"— frames captured before the pause are overwritten."})
+                    await self._rail_to(session.rail_start_steps, session, fast=True)
+                    frame_idx = 0
+                    continue
 
                 target_mm    = float(traj_rail[frame_idx])
                 target_steps = int(target_mm * STEPS_PER_MM)
@@ -3105,6 +3148,10 @@ class MacroEngine:
                                f"[{slot.label}]"
                     })
 
+
+                # while-loop: the for-loop's implicit increment is gone, and a
+                # missed increment here is an infinite loop that never captures.
+                frame_idx += 1
             # ── 4. Return rail to start ───────────────────────────────────────
             if not self._stop_event.is_set():
                 logger.info(f"✓ Stack {stack_idx+1} done — returning focus to start [FAST]")
