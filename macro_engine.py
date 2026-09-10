@@ -2705,6 +2705,22 @@ class MacroEngine:
                     if slot.relay_settle_ms > 0:
                         await asyncio.sleep(slot.relay_settle_ms / 1000.0)
 
+                    # Wait for any in-flight USB download BEFORE talking to the
+                    # camera again.
+                    #
+                    # macro_capture() returns as soon as the shutter fires and
+                    # lets the download run as a background task so the rail can
+                    # move underneath it. That is fine for the rail, but the very
+                    # next thing here is a settings call over the SAME USB
+                    # interface the download is holding, so gphoto2 could not
+                    # claim interface 0 and every slot failed with -53:
+                    #   gphoto2 --capture-image-and-download ... (still running)
+                    #   set_sony_settings_usb: Could not claim the USB device
+                    # The rail move above still overlaps the download; only the
+                    # camera conversation is serialised, which it has to be.
+                    if self._drain is not None:
+                        await self._drain()
+
                     # Apply camera settings for this slot
                     await self._apply_cam(slot)
 
@@ -2954,6 +2970,12 @@ class MacroEngine:
                     self.hw.set_relay2(slot.relay2)
                     if slot.relay_settle_ms > 0:
                         await asyncio.sleep(slot.relay_settle_ms / 1000.0)
+
+                    # Same serialisation as the primary capture loop: a pipelined
+                    # download still holds USB interface 0, so the settings call
+                    # has to wait for it or gphoto2 fails with -53.
+                    if self._drain is not None:
+                        await self._drain()
 
                     await self._apply_cam(slot)
 
