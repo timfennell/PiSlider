@@ -96,8 +96,20 @@ body.running #header {
     pointer-events: all;
     opacity: 1;
 }
-/* E-stop and cinematic stop always hot during running state */
-#stopBtn, #cineStopBtn {
+/* Controls that must stay live while a sequence runs.
+ *
+ * body.running kills pointer-events across the whole #sidebar, so anything
+ * inside it that an operator needs MID-RUN has to be listed here or it renders
+ * looking perfectly enabled and silently swallows every click. #macroPauseBtn
+ * was exactly that: visible, full opacity, completely inert — reported from a
+ * live scan as "the pause button is in the area of the UI that is disabled".
+ *
+ * Pause is not a convenience. It is the control you reach for when something is
+ * going wrong and you do NOT want to E-stop and lose the run — a background
+ * that has drifted, a specimen that has shifted. Losing it during a 13-hour
+ * scan means the only remaining option is the one that throws work away.
+ */
+#stopBtn, #cineStopBtn, #macroPauseBtn {
     pointer-events: all !important;
     opacity: 1 !important;
 }
