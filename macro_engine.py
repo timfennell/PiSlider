@@ -31,6 +31,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Optional, List, Dict, Any, Callable
 
 import numpy as np
+from urllib.parse import quote as _urlquote
 from distributions import CURVE_FUNCTIONS, normalize
 from slider import TimelapseTrajectoryPlayer
 
@@ -422,6 +423,19 @@ def compute_geodesic_grid(total_stacks: int, pan_min: float, pan_max: float,
 _GOLDEN_ANGLE = math.pi * (3.0 - math.sqrt(5.0))
 
 
+def _macro_img_url(path: str) -> str:
+    """URL for the /macro_img route, with the path safe to survive a query string.
+
+    Interpolating the path raw does not work, and fails in a way that looks like
+    the graph page is broken rather than the URL. Stack folders are named
+    rot%+08.3f, so every node at a positive angle has a '+' in its path — and a
+    '+' in a query value decodes to a SPACE. The server then looked for
+    'rot 070.351_aux-071.25' and returned 404 for the entire scan. Only nodes
+    that happened to be negative on both axes could load a preview at all.
+    """
+    return "/macro_img?p=" + _urlquote(str(path), safe="")
+
+
 def _pan_axis_vec(pan_axis_tilt_deg: float):
     """Pan axis unit vector and alpha, matching _colmap_pose() exactly."""
     alpha = math.radians(90.0 - pan_axis_tilt_deg)
@@ -650,6 +664,179 @@ def _serpentine_motor_order(kept):
     return best[1] if best else list(range(len(kept)))
 
 
+# ── Helix path planning ───────────────────────────────────────────────────────
+#
+# Why a helix rather than a scatter of points joined by a travelling-salesman
+# walk: for photogrammetry the thing that decides success is not how evenly the
+# nodes are spread, it is how far apart NEIGHBOURING views are. Feature matching
+# on a real specimen falls off a cliff — measured on bee 5, 77% of image pairs
+# under 20 deg apart produced a verified two-view geometry, 17% between 20 and
+# 30 deg, and nothing at all beyond 30 deg. A path whose consecutive nodes are
+# a fixed small step apart puts every capture inside that window by
+# construction, and the wound track gives each node neighbours on the turns
+# either side as well as along its own.
+#
+# The rig's geometry makes this natural. With the pan axis at 90 deg,
+#
+#     v = (sin(pan), -cos(pan) sin(tilt), -cos(pan) cos(tilt))
+#
+# so pan alone sets v_x: pan is LATITUDE about the x poles, and tilt is the
+# AZIMUTH circle at that latitude. Pan is the cable-limited axis and tilt turns
+# freely, which means a helix that walks pan slowly across its range while tilt
+# winds is exactly the motion the hardware wants — the limited axis makes a
+# single monotone traverse and the free axis does all the spinning.
+#
+# Even spacing needs the azimuth step to grow as the track approaches a pole,
+# where the circles are small. Writing u = sin(pan) (equal-area latitude) and
+# h = (u1-u0)/N for N nodes, requiring the along-track step to equal the gap
+# between turns gives
+#
+#     d(tilt) = sqrt(2*pi*h) / sqrt(1 - u^2)        spacing s = sqrt(2*pi*h)
+#
+# which is the Rakhmanov-Saff-Zhou spiral (their empirical 3.6/sqrt(N) is this
+# expression for the full sphere, sqrt(4*pi/N) = 3.545/sqrt(N)).
+#
+# Inverting s = sqrt(2*pi*h) gives the node count for a target spacing:
+#
+#     N = 2*pi*(u1-u0) / s^2          (full sphere: 4*pi/s^2)
+#
+# 15 deg over a full sphere is 183 nodes. That is the real lesson from bee 5:
+# 23 nodes over a third of the sphere landed at ~17 deg nearest-neighbour
+# spacing, right on the cliff edge, and the match graph came out in 8 pieces.
+
+
+def helix_node_count(pan_lo_deg: float, pan_hi_deg: float,
+                     spacing_deg: float) -> int:
+    """Nodes needed to sample a pan band at a given neighbour spacing."""
+    u0 = math.sin(math.radians(min(pan_lo_deg, pan_hi_deg)))
+    u1 = math.sin(math.radians(max(pan_lo_deg, pan_hi_deg)))
+    s  = math.radians(max(0.1, spacing_deg))
+    return max(1, int(round(2.0 * math.pi * (u1 - u0) / (s * s))))
+
+
+def helix_spacing_deg(pan_lo_deg: float, pan_hi_deg: float, n: int) -> float:
+    """The inverse: neighbour spacing that n nodes will actually achieve."""
+    u0 = math.sin(math.radians(min(pan_lo_deg, pan_hi_deg)))
+    u1 = math.sin(math.radians(max(pan_lo_deg, pan_hi_deg)))
+    h  = (u1 - u0) / max(1, int(n))
+    return math.degrees(math.sqrt(2.0 * math.pi * max(h, 0.0)))
+
+
+def helix_nodes(n: int, pan_lo_deg: float, pan_hi_deg: float,
+                double: bool = False, tilt_span_deg: float = 360.0):
+    """(pan_deg, tilt_deg) along an evenly-spaced helix across the pan band.
+
+    A single pass is the default because it measures better on every count that
+    matters. Rows of the helix land 2s apart in PAN ANGLE regardless of latitude
+    (u advances 2*r*s per turn and dpan = du/r), so a second pass offset by s
+    does interleave correctly — but it still loses. At 100 nodes over bee 5's
+    band, single vs double:
+
+        spacing CoV        0.012   vs  0.309
+        consecutive step   16.6 max 16.7  vs  16.6 max 42.5
+        pan travel          92 deg  vs  166 deg
+
+    The double pass exists to finish with pan back where it started, but the
+    return it saves (one uncaptured 94 deg slew) costs 74 deg of extra travel
+    during the scan, so it does not even pay for itself in motion. Kept behind
+    the flag because the turnaround does give nodes neighbours from the other
+    pass, which may matter on a band too narrow for the helix to wind twice.
+
+    tilt_span_deg below 360 cannot wind, so the azimuth reverses at each end
+    instead (a serpentine), keeping the even spacing but giving up the return.
+    """
+    n = max(1, int(n))
+    lo, hi = min(pan_lo_deg, pan_hi_deg), max(pan_lo_deg, pan_hi_deg)
+    u0, u1 = math.sin(math.radians(lo)), math.sin(math.radians(hi))
+    if u1 - u0 < 1e-9:
+        return [(lo, (i * 360.0 / n) - 180.0) for i in range(n)]
+
+    h = (u1 - u0) / n                      # z-step per node, BOTH passes
+    s = math.sqrt(2.0 * math.pi * h)       # resulting isotropic spacing, rad
+    wrap = tilt_span_deg >= 350.0
+    # A serpentine has to fit its azimuth inside the band, so it cannot use the
+    # 1/sqrt(1-u^2) widening without running off the end; it gets even rows.
+    half_span = max(1.0, tilt_span_deg) / 2.0
+
+    def pass_nodes(count, step_u, u_start, phi0, descending):
+        out, phi = [], phi0
+        for k in range(count):
+            u = u_start + (k + 0.5) * step_u * (-1 if descending else 1)
+            u = max(-1.0, min(1.0, u))
+            r = math.sqrt(max(1e-9, 1.0 - u * u))
+            out.append((math.degrees(math.asin(u)), phi))
+            phi += math.degrees(s / r)
+        return out, phi
+
+    if double and n >= 4:
+        n_a = n // 2
+        n_b = n - n_a
+        # Each pass crosses the whole band, so it steps u twice as fast. Pass B
+        # starts half a row up the band — half a row is s in PAN ANGLE, not a
+        # fixed step in u — so its turns thread between pass A's instead of
+        # landing on the same latitudes. Built ascending and then reversed, so
+        # the traversal comes back down while the latitudes still interleave.
+        a, phi_end = pass_nodes(n_a, (u1 - u0) / n_a, u0, 0.0, False)
+        u0b = math.sin(math.radians(min(hi, lo + math.degrees(s))))
+        b, _ = pass_nodes(n_b, (u1 - u0b) / n_b, u0b, phi_end + 180.0, False)
+        pts = a + b[::-1]
+    else:
+        pts, _ = pass_nodes(n, (u1 - u0) / n, u0, 0.0, False)
+
+    out = []
+    for pan, phi in pts:
+        if wrap:
+            t = ((phi + 180.0) % 360.0) - 180.0
+        else:
+            # Fold the accumulated azimuth back and forth inside the band.
+            p = phi % (2.0 * tilt_span_deg)
+            t = p if p <= tilt_span_deg else (2.0 * tilt_span_deg - p)
+            t -= half_span
+        out.append((pan, t))
+    return out
+
+
+def plan_helix_nodes(session: MacroSession) -> List[Dict[str, Any]]:
+    """Node plan following an evenly-spaced double helix across the pan band.
+
+    Same output shape as plan_geodesic_nodes(), so the scan graph, the resume
+    logic and generate_scan_positions() all consume it unchanged. Unreachable
+    nodes are dropped rather than moved: the helix is already a valid motor
+    trajectory by construction, and nudging a node to make it reachable would
+    break the even spacing the whole path exists to provide.
+    """
+    n_req  = max(1, int(getattr(session, "num_stacks", 1)))
+    axis   = float(getattr(session, "pan_axis_tilt_deg", 90.0))
+    pan_lo = min(session.rotation_start_deg, session.rotation_end_deg)
+    pan_hi = max(session.rotation_start_deg, session.rotation_end_deg)
+    t_lo   = float(getattr(session, "aux_start_deg", -180.0))
+    t_hi   = float(getattr(session, "aux_end_deg",    180.0))
+    if t_hi < t_lo:
+        t_lo, t_hi = t_hi, t_lo
+    tilt_span = t_hi - t_lo
+    double = bool(getattr(session, "helix_double", False))
+
+    out: List[Dict[str, Any]] = []
+    for pan, tilt in helix_nodes(n_req, pan_lo, pan_hi, double, tilt_span):
+        if pan < pan_lo - 1e-6 or pan > pan_hi + 1e-6:
+            continue
+        if tilt_span < 350.0 and not (t_lo - 1e-6 <= tilt <= t_hi + 1e-6):
+            continue
+        v = viewpoint_for(pan, tilt, axis)
+        if motors_for_viewpoint(v, axis) is None:
+            continue                       # outside the tilted axis's reach
+        out.append({
+            "stack":    len(out),
+            "pan_deg":  round(float(pan), 3),
+            "tilt_deg": round(float(tilt), 3),
+            "x": round(float(v[0]), 6),
+            "y": round(float(v[1]), 6),
+            "z": round(float(v[2]), 6),
+            "state":    "pending",
+        })
+    return out
+
+
 def plan_geodesic_nodes(session: MacroSession) -> List[Dict[str, Any]]:
     """Full node plan: even distribution, reachability filter, serpentine path.
 
@@ -814,7 +1001,28 @@ def orbit_positions(session: MacroSession) -> List[tuple]:
     if not session.aux_enabled:
         tilt = session.aux_start_deg
         return [(pan, tilt) for pan in rotation_angles(session)]
-    return [(n["pan_deg"], n["tilt_deg"]) for n in plan_geodesic_nodes(session)]
+    return [(n["pan_deg"], n["tilt_deg"]) for n in plan_scan_nodes(session)]
+
+
+def plan_scan_nodes(session: MacroSession) -> List[Dict[str, Any]]:
+    """The node plan actually used for capture. Helix unless asked otherwise.
+
+    Both planners spread nodes evenly; the helix wins on the number that decides
+    whether COLMAP can reconstruct anything, which is how far apart NEIGHBOURING
+    views are and how uniform that distance is. Measured over bee 5's band at
+    100 nodes:
+
+                            spacing CoV   worst consecutive step   min nbrs <20 deg
+        geodesic+serpentine    0.120              24.2 deg               1
+        helix                  0.012              16.7 deg               3
+
+    The serpentine has to jump between bands; the helix never jumps at all, so
+    its worst step equals its typical step. That matters because a node whose
+    only neighbour is 24 deg away is a node COLMAP will likely fail to register.
+    """
+    if str(getattr(session, "path_style", "helix")).lower() == "geodesic":
+        return plan_geodesic_nodes(session)
+    return plan_helix_nodes(session)
 
 
 def _fibonacci_sphere(n: int) -> List[tuple]:
@@ -2882,7 +3090,7 @@ class MacroEngine:
                         "rail_mm":      target_mm,
                         "iso":          slot.iso,
                         "shutter_s":    slot.shutter_s,
-                        "preview_url":  f"/macro_img?p={_latest_jpg}" if _latest_jpg else None,
+                        "preview_url":  _macro_img_url(_latest_jpg) if _latest_jpg else None,
                         "msg": f"Stack {stack_idx+1}/{session.num_stacks}  "
                                f"Frame {frame_idx+1}/{frames_per_stack}  "
                                f"[{slot.label}]"
@@ -2963,7 +3171,7 @@ class MacroEngine:
                 "iso":          session.slots[0].iso if session.slots else 400,
                 "shutter_s":    session.slots[0].shutter_s if session.slots else 1/125,
                 "completed":    stack_meta["completed"],
-                "preview_urls": [f"/macro_img?p={jpg}" for jpg in stack_preview_jpgs],
+                "preview_urls": [_macro_img_url(jpg) for jpg in stack_preview_jpgs],
             })
 
     async def _run_sequence_grid(self, session: MacroSession,
@@ -3161,7 +3369,7 @@ class MacroEngine:
                         "iso":          slot.iso,
                         "shutter_s":    slot.shutter_s,
                         "depth_per_image_um": depth_per_image_um(session),
-                        "preview_url":  f"/macro_img?p={_gjpg}" if _gjpg else None,
+                        "preview_url":  _macro_img_url(_gjpg) if _gjpg else None,
                         "msg": f"Stack {stack_idx+1}/{n_total}  "
                                f"Frame {frame_idx+1}/{frames_per_stack}  "
                                f"[{slot.label}]"
