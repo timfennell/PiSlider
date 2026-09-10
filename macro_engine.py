@@ -2237,6 +2237,7 @@ class MacroEngine:
         # across restarts, written into the XMP sidecars and used to seed the NEXT
         # scan all describe where the arm was before this scan started.
         self._pos         = pos_fn
+        self._bg_baseline = None   # R/B of the matting background, set on first capture
         self._stop_event  = asyncio.Event()
         self.is_running   = False
 
@@ -2816,6 +2817,22 @@ class MacroEngine:
                         if fname.endswith('_preview.jpg'):
                             stack_preview_jpgs.append(os.path.join(s_dir, fname))
 
+            # ── 5c. Background colour-drift check ────────────────────────────
+            # Once per stack is enough: a display filter switches on a schedule,
+            # so catching it within one stack loses at most one stack, not six
+            # hours. Costs a single small JPEG read.
+            if stack_preview_jpgs:
+                _msg = self._check_bg_drift(stack_preview_jpgs[0],
+                                            label=f"stack {stack_idx+1}")
+                if _msg:
+                    logger.error(f"🎨 STOPPING — {_msg}")
+                    await self._broadcast({"type": "log",
+                        "msg": f"⛔ Scan stopped — {_msg}"})
+                    await self._broadcast({"type": "log",
+                        "msg": f"   Stacks 1–{stack_idx} are good. Fix the phone, then "
+                               f"resume from stack {stack_idx} to reshoot from here."})
+                    self._stop_event.set()
+
             # ── 6. Return rail to start at high speed ─────────────────────────
             if not self._stop_event.is_set():
                 current_mm = self.rail_pos_steps / STEPS_PER_MM
@@ -3145,6 +3162,69 @@ class MacroEngine:
         # Do NOT disable motors here — hold torque is required between focus steps
         # to prevent specimen drift. Motors are disabled once at end of run().
         logger.info(f"  ✓ COMPLETE: rail now at {self.rail_pos_steps} steps (≈{target_mm:.2f}mm)")
+
+    # ── Background colour-drift guard ────────────────────────────────────────
+    # The matting background is a phone screen, and the app cannot control what
+    # the phone's OS does to it. Android Night Light on an 11pm schedule warmed
+    # a live scan from 5500K to roughly 2700K partway through; the app kept
+    # sending kelvin=5500 and the screen kept rendering orange, because an OS
+    # display filter sits on top of anything the page draws.
+    #
+    # That is not merely cosmetic. Triangulation matting solves
+    #   alpha = 1 - (cw - cb) / (cal_w - cal_b)
+    # against a background whose colour is assumed to match calibration. Shift
+    # the background and the numerator moves per channel while the calibrated
+    # denominator does not, so alpha comes out wrong and differently in R, G
+    # and B — coloured fringing that looks like a matting bug rather than a
+    # lighting change.
+    #
+    # So: sample the background from each capture and stop the scan if it
+    # drifts. Six unattended hours producing unusable frames is the failure
+    # worth preventing.
+    BG_DRIFT_TOL = 0.15      # log2 of the R/B ratio; trips between 5000K and 4500K
+
+    def _bg_chroma(self, preview_path):
+        """Mean R/B of the frame corners, where the background lives."""
+        try:
+            import cv2
+            img = cv2.imread(str(preview_path), cv2.IMREAD_COLOR)   # BGR
+        except Exception:
+            return None
+        if img is None or img.size == 0:
+            return None
+        h, w = img.shape[:2]
+        ch, cw = max(8, h // 8), max(8, w // 8)
+        corners = np.concatenate([
+            img[:ch, :cw].reshape(-1, 3), img[:ch, -cw:].reshape(-1, 3),
+            img[-ch:, :cw].reshape(-1, 3), img[-ch:, -cw:].reshape(-1, 3)])
+        # Ignore near-black pixels: an unlit corner carries no colour information
+        lum = corners.mean(axis=1)
+        corners = corners[lum > 25]
+        if corners.shape[0] < 64:
+            return None
+        b, g, r = (float(corners[:, i].mean()) for i in range(3))
+        if b < 1.0:
+            return None
+        return r / b
+
+    def _check_bg_drift(self, preview_path, label=""):
+        """Return None if fine, or a message describing the drift."""
+        rb = self._bg_chroma(preview_path)
+        if rb is None:
+            return None
+        if self._bg_baseline is None:
+            self._bg_baseline = rb
+            logger.info(f"🎨 Background reference set: R/B={rb:.3f} ({label})")
+            return None
+        drift = abs(math.log2(rb / self._bg_baseline)) if rb > 0 else 0.0
+        if drift > self.BG_DRIFT_TOL:
+            warmer = rb > self._bg_baseline
+            return (f"Background colour drifted {'WARMER' if warmer else 'COOLER'}: "
+                    f"R/B {self._bg_baseline:.3f} -> {rb:.3f} "
+                    f"(drift {drift:.3f} > {self.BG_DRIFT_TOL}). "
+                    f"Check the phone for a night-mode / blue-light filter and any "
+                    f"scheduled display tint. Frames from here would matte wrongly.")
+        return None
 
     async def _move_rotation(self, rot_deg: float, aux_deg: Optional[float],
                              session: MacroSession) -> None:

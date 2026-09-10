@@ -1873,6 +1873,28 @@
                         <div style="font-size:0.7rem; color:#888; margin-top:10px;">
                             <span id="bgPhoneStatus">● No phone connected</span>
                         </div>
+
+                        <!-- The phone is the matting background, so anything its OS
+                             does to the display corrupts the matte. A night-mode
+                             schedule warmed a live scan from 5500K to ~2700K at 11pm
+                             and the app cannot override it: an OS display filter sits
+                             on top of whatever the page renders. -->
+                        <div style="margin-top:14px; padding:10px 12px; text-align:left;
+                             background:#2a1f0a; border:1px solid #7a5c14; border-radius:8px;">
+                            <div style="font-size:0.7rem; color:#f0c14b; font-weight:600;
+                                 margin-bottom:6px;">⚠ Before you start a scan</div>
+                            <div style="font-size:0.66rem; color:#d8c48a; line-height:1.55;">
+                                On <b>this phone</b>, turn off <b>Night Light / Blue light
+                                filter / Eye comfort shield</b> — and its <b>schedule</b>,
+                                not just the current session.<br><br>
+                                It turns the screen warm on a timer (often at sunset or
+                                11pm) and PiSlider cannot override it. The background is
+                                your matte reference, so a warm screen ruins every frame
+                                shot after it.<br><br>
+                                Also set <b>screen timeout to Never</b> and turn off
+                                <b>auto-brightness</b>.
+                            </div>
+                        </div>
                         <button onclick="document.getElementById('bgPhoneModal').style.display='none'"
                             style="margin-top:14px; background:#333; border:1px solid #555; color:#ccc;
                             border-radius:8px; padding:6px 20px; cursor:pointer; font-size:0.75rem;">Close</button>
