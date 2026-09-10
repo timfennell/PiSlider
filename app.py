@@ -697,6 +697,9 @@ def _build_macro_session(msg: dict) -> "MacroSession":
         pan_cols             = int(msg.get("pan_cols",      4)),
         tilt_rows            = int(msg.get("tilt_rows",     3)),
         grid_snake           = bool(msg.get("grid_snake",   True)),
+        # Recorded from live state, not the start message: it is a rig setting
+        # the operator sets while framing, not a per-scan parameter.
+        camera_orientation   = state.get("camera_orientation", "landscape"),
         path_style           = str(msg.get("path_style",   "helix")).lower(),
         helix_double         = bool(msg.get("helix_double", False)),
         pan_axis_tilt_deg    = float(msg.get("pan_axis_tilt_deg", 90.0)),

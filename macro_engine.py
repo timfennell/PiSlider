@@ -140,6 +140,10 @@ class MacroSession:
     path_style:     str  = "helix"   # helix | geodesic
     helix_double:   bool = False     # helix: second pass back down the band
 
+    # Which way up the operator framed the specimen, recorded so the processing
+    # side can reproduce it. landscape | portrait_cw | portrait_ccw | inverted
+    camera_orientation: str = "landscape"
+
     # Rig geometry for COLMAP pose computation
     pan_axis_tilt_deg: float = 90.0  # pan shaft tilt from vertical toward camera (degrees)
                                      # 90° = vertical axis (default), <90° = tilted toward camera
@@ -1961,6 +1965,13 @@ def write_project_json(proj_folder: str, session: MacroSession,
         "project_name":  session.project_name,
         "created":       datetime.datetime.now().isoformat(),
         "lens_profile":  _serial(session.lens),
+        # The operator's framing choice, so the processing side does not have to
+        # trust the camera's accelerometer. Sony writes its own orientation flag
+        # into the ARW and rawpy honours it by default (user_flip=-1); on this
+        # rig that silently resolved to a 90 CCW rotation. A camera aimed
+        # steeply up or down can report a different flag frame to frame, which
+        # would rotate part of a scan against the rest.
+        "camera_orientation": getattr(session, "camera_orientation", "landscape"),
         "rig": {
             "lead_screw_pitch_mm": LEAD_SCREW_PITCH_MM,
             "steps_per_mm":        STEPS_PER_MM,
