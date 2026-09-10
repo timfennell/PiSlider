@@ -10234,6 +10234,26 @@ async def bg_phone_page():
         return HTMLResponse(content=f.read())
 
 
+@app.get("/api/bg_force")
+async def bg_force(color: str = "white", kelvin: int = 5500, brightness: int = 100):
+    """Force the background phone to a known colour and temperature.
+
+    The slot loop already commands the phone before every capture, so this is
+    not normally needed. It exists for the case where the phone drifted and you
+    want to assert a known state without starting a sequence — and to tell the
+    two failure modes apart: if this returns ok and the screen is STILL warm,
+    the page is rendering what it was told and the phone's OS is filtering the
+    display on top (Night Light / blue-light filter), which no app command can
+    override.
+    """
+    ok = await send_bg_command(color, int(kelvin), 300, int(brightness))
+    logger.info(f"bg_force: {color} @ {kelvin}K brightness={brightness} -> ack={ok}")
+    return {"ok": bool(ok), "color": color, "kelvin": int(kelvin),
+            "brightness": int(brightness),
+            "note": ("phone acknowledged" if ok else
+                     "no phone connected, or it did not acknowledge")}
+
+
 @app.get("/api/qr")
 async def qr_code(url: str):
     """Return a QR code PNG for the given URL."""
