@@ -1525,9 +1525,9 @@
                     <div class="control-item half">
                         <label title="Helix: one continuous wound path, every consecutive node the same distance apart. Geodesic: evenly scattered nodes joined by a serpentine, which has to jump between bands.">Scan path</label>
                         <select id="macro_path_style" onchange="macroCalc()">
-                            <option value="helix" selected>Helix (single pass)</option>
-                            <option value="helix_double">Helix (double, returns to start)</option>
-                            <option value="geodesic">Geodesic + serpentine</option>
+                            <option value="helix" selected>Helix — single pass (recommended)</option>
+                            <option value="helix_double">Helix — double pass (uneven, 42° jump)</option>
+                            <option value="geodesic">Geodesic + serpentine (24° worst step)</option>
                         </select>
                     </div>
                     <div class="control-item half">
