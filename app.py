@@ -43,7 +43,8 @@ import numpy as np
 from pathlib import Path
 from typing import Optional, Tuple
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Request, HTTPException
-from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
+from fastapi.responses import (StreamingResponse, HTMLResponse, JSONResponse,
+                               FileResponse, Response)
 from fastapi.staticfiles import StaticFiles
 
 from hardware import HardwareController
@@ -2490,11 +2491,49 @@ async def video_feed():
     return StreamingResponse(get_picam_liveview(),
         media_type="multipart/x-mixed-replace; boundary=frame")
 
+_ORIENT_ROT = {
+    "portrait_cw":  cv2.ROTATE_90_CLOCKWISE,
+    "portrait_ccw": cv2.ROTATE_90_COUNTERCLOCKWISE,
+    "inverted":     cv2.ROTATE_180,
+}
+
+
+def _orient_jpeg(jpeg_bytes: bytes) -> bytes:
+    """Apply the camera-orientation setting to a JPEG on its way to the browser.
+
+    The orientation is the operator's answer to "which way up is this specimen",
+    chosen while framing in live view. It has to mean the same thing everywhere
+    a frame is shown, or the live view has the bee's feet down and every
+    thumbnail beside it has them sideways.
+
+    Applied at serve time rather than baked into the saved file, for two
+    reasons: changing the setting re-orients frames already on disk, and the
+    captures stay in sensor orientation, which is what the matting and stacking
+    pipeline reads. Landscape returns the original bytes untouched, so the
+    common case costs nothing.
+    """
+    rot = _ORIENT_ROT.get(state.get("camera_orientation", "landscape"))
+    if rot is None or not jpeg_bytes:
+        return jpeg_bytes
+    try:
+        arr = cv2.imdecode(np.frombuffer(jpeg_bytes, np.uint8), cv2.IMREAD_COLOR)
+        if arr is None:
+            return jpeg_bytes
+        ok, buf = cv2.imencode(".jpg", cv2.rotate(arr, rot),
+                               [cv2.IMWRITE_JPEG_QUALITY, 88])
+        return buf.tobytes() if ok else jpeg_bytes
+    except Exception as e:
+        # Never lose the frame over a rotation failure.
+        logger.debug(f"orientation transform skipped: {e}")
+        return jpeg_bytes
+
+
 @app.get("/latest_frame")
 async def latest_frame():
     global _latest_shot
     if _latest_shot:
-        return StreamingResponse(iter([_latest_shot]), media_type="image/jpeg",
+        return StreamingResponse(iter([_orient_jpeg(_latest_shot)]),
+            media_type="image/jpeg",
             headers={"Cache-Control": "no-cache, no-store"})
     blank = np.zeros((360, 640, 3), dtype=np.uint8)
     cv2.putText(blank, "WAITING FOR FIRST FRAME", (80, 180),
@@ -10142,15 +10181,30 @@ app.mount("/night_thumbs", StaticFiles(directory="night thumbs"), name="night_th
 
 @app.get("/thumbs/{frame_id}")
 async def get_thumb(frame_id: str):
-    """Serve a sequence thumbnail for the graph timelapse player."""
-    from fastapi.responses import FileResponse, Response
+    """Serve a sequence thumbnail for the graph timelapse player.
+
+    Carries the camera-orientation setting, like every other place a frame is
+    shown. That interacts with caching: the file never changes once written, but
+    the orientation applied to it can, and a year-long immutable cache would go
+    on serving the old rotation long after the operator changed it. So the
+    long cache is kept only for landscape — the untransformed passthrough — and
+    a rotated thumb revalidates against an ETag that includes the orientation.
+    Revalidation costs one 304 with no body.
+    """
     thumb_path = os.path.join(state["save_path"], "thumbs", f"THUMB_{frame_id}.jpg")
-    if os.path.exists(thumb_path):
+    if not os.path.exists(thumb_path):
+        # Thumb not found — return 404 so browser doesn't cache the miss
+        raise HTTPException(status_code=404, detail="Thumb not ready yet")
+    orient = state.get("camera_orientation", "landscape")
+    if orient == "landscape":
         # Cache real thumbs for 1 year — they never change once written
         return FileResponse(thumb_path, media_type="image/jpeg",
                             headers={"Cache-Control": "public, max-age=31536000"})
-    # Thumb not found — return 404 so browser doesn't cache the miss
-    raise HTTPException(status_code=404, detail="Thumb not ready yet")
+    with open(thumb_path, "rb") as fh:
+        data = _orient_jpeg(fh.read())
+    return Response(content=data, media_type="image/jpeg",
+                    headers={"Cache-Control": "no-cache",
+                             "ETag": f'"{frame_id}-{orient}-{len(data)}"'})
 
 
 
@@ -10267,7 +10321,20 @@ async def serve_macro_img(p: str):
         raise HTTPException(status_code=403, detail="Path outside allowed roots")
     if not os.path.isfile(full):
         raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(full, media_type="image/jpeg")
+    # Same orientation the operator set in live view — the scan graph's
+    # flipbook draws these to a canvas, so a CSS transform would not reach it.
+    #
+    # The ETag carries the orientation because the URL cannot: the file is
+    # immutable but what we serve for it is not, and a browser revalidating on
+    # Last-Modified alone would keep the pre-rotation copy indefinitely.
+    orient = state.get("camera_orientation", "landscape")
+    hdrs = {"Cache-Control": "no-cache",
+            "ETag": f'"{os.path.getmtime(full):.0f}-{orient}"'}
+    if orient == "landscape":
+        return FileResponse(full, media_type="image/jpeg", headers=hdrs)
+    with open(full, "rb") as fh:
+        return Response(content=_orient_jpeg(fh.read()),
+                        media_type="image/jpeg", headers=hdrs)
 
 @app.get("/macro_graph")
 async def macro_graph_page():

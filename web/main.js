@@ -3300,6 +3300,10 @@ function _applyOrientationUI(orient) {
 
 function handleCameraOrientation(data) {
     _applyOrientationUI(data.value);
+    // The server applies the orientation when it serves a frame, so anything
+    // already in the browser still carries the old rotation. Bust it, or the
+    // live view turns and the last-shot panel beside it does not.
+    if (els.latestFrame) els.latestFrame.src = `/latest_frame?t=${Date.now()}`;
 }
 function toggleLoupeVisibility() {
     _loupeUserVisible = !_loupeUserVisible;

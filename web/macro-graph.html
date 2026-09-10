@@ -649,6 +649,18 @@ let socket = null;
 function ingest(d) {
   if (d.type === 'init') return;
 
+  // ── Camera orientation changed: drop decoded frames and repaint ──
+  // The server applies the operator's orientation when it serves a frame, so
+  // everything already decoded in _imgCache still carries the old rotation.
+  // Without this the flipbook keeps showing the specimen sideways until the
+  // page is reloaded, which reads as the setting not applying to the graph.
+  if (d.type === 'camera_orientation') {
+    _imgCache = {};
+    _imgTries = {};
+    paintFlipbook();
+    return;
+  }
+
   // ── Scan planned: initialise sphere with all positions ──
   if (d.type === 'macro_scan_start') {
     if (!sphereScene) initSphere();
