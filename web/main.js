@@ -1924,6 +1924,10 @@ function handleIncomingData(data) {
     // ── Run state change ──────────────────────────────────────────────────────
     if (data.type === "run_state") {
         setRunState(data.running);
+        // Show the Pause control only while something is actually running.
+        // macroSetRunning existed but nothing ever called it, so the button
+        // stayed hidden and pause was unreachable from the UI.
+        macroSetRunning(!!data.running);
         if (!data.running) _clearReturnToStartBusy();
     }
 
@@ -3925,6 +3929,12 @@ function macroStart() {
         num_stacks: parseInt(document.getElementById('macro_num_stacks')?.value || 36),
         // 0 = fresh orbit. N = skip the first N stacks (resume after an interruption).
         resume_from_stack: parseInt(document.getElementById('macro_resume_from')?.value || 0),
+        // Recorded angles from an interrupted orbit's sequence.json. Replaying
+        // them is what makes a resume line up: recomputing after any change to
+        // num_stacks, the ranges or the axis angle would move the continued
+        // stacks off the path the completed ones lead to.
+        preset_angles: _resumePreset ? _resumePreset.angles_deg : null,
+        preset_aux:    _resumePreset ? _resumePreset.aux_positions_deg : null,
         rotation_easing: document.getElementById('macro_rotation_easing')?.value || 'even',
         rotation_axis_angle_deg: parseFloat(document.getElementById('macro_rot_axis_angle')?.value || 90),
         rotation_axis_description: document.getElementById('macro_rot_axis_desc')?.value || 'vertical',
@@ -4046,6 +4056,55 @@ function captureFlats() {
     sendCmd('capture_flats', { slots });
 }
 
+
+// ─── Resume an interrupted scan ─────────────────────────────────────────────────
+let _resumePreset = null;      // the recorded path, when resuming
+
+async function macroCheckFolder(showWhenClean) {
+    const path = document.getElementById('save_path')?.value;
+    const el   = document.getElementById('macro_resume_status');
+    if (!path) return;
+    if (el) { el.textContent = 'Checking folder…'; el.style.color = 'var(--text-dim)'; }
+    let d;
+    try {
+        const r = await fetch('/api/macro/project_info?path=' + encodeURIComponent(path));
+        d = await r.json();
+    } catch (e) {
+        if (el) { el.textContent = 'Could not check folder: ' + e; el.style.color = '#c66'; }
+        return;
+    }
+    _resumePreset = null;
+    if (!d.found || !d.resumable) {
+        if (el) {
+            el.textContent = d.found ? 'Project found — all orbits complete.'
+                                     : (showWhenClean ? 'No interrupted scan here — a fresh orbit will be shot.' : '');
+            el.style.color = 'var(--text-dim)';
+        }
+        const f = document.getElementById('macro_resume_from');
+        if (f) f.value = 0;
+        return;
+    }
+    const o = d.resumable;
+    _resumePreset = o;
+    const f = document.getElementById('macro_resume_from');
+    if (f) f.value = o.resume_from;
+    if (el) {
+        el.innerHTML = '\u21bb <b>' + o.orbit_label + '</b>: ' + o.completed + '/' + o.total +
+            ' stacks done \u2014 will resume at stack ' + (o.resume_from + 1) +
+            '. Earlier stacks are left untouched.' +
+            '<br><span style="opacity:.75">Recorded path replayed (' +
+            (o.angles_deg ? o.angles_deg.length : 0) + ' positions), so the continued ' +
+            'stacks line up with the completed ones.</span>';
+        el.style.color = 'var(--accent-teal)';
+    }
+}
+
+function macroClearResume() {
+    _resumePreset = null;
+    const f = document.getElementById('macro_resume_from'); if (f) f.value = 0;
+    const el = document.getElementById('macro_resume_status');
+    if (el) { el.textContent = 'Resume cleared — a fresh orbit will be shot.'; el.style.color = 'var(--text-dim)'; }
+}
 
 // ─── Macro pause ────────────────────────────────────────────────────────────────
 let _macroPaused = false;
