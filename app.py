@@ -10502,6 +10502,25 @@ async def ws_bg_endpoint(websocket: WebSocket):
             data = await websocket.receive_json()
             msg_type = data.get("type", "")
             if msg_type == "bg_ready":
+                # 'via' says how the phone confirmed: 'paint' means it observed
+                # the new colour actually reach the screen; 'timeout' means the
+                # fallback timer fired because requestAnimationFrame was not
+                # running — the tab is backgrounded or the screen has locked.
+                #
+                # That distinction is worth surfacing. A phone whose screen has
+                # slept is not showing the background at all, and every matte
+                # from that point is solved against whatever is actually on the
+                # panel. Silence about it is how a scan gets ruined quietly.
+                _bg_via = data.get("via", "paint")
+                if _bg_via != "paint":
+                    global _bg_timeout_acks
+                    _bg_timeout_acks = globals().get("_bg_timeout_acks", 0) + 1
+                    if _bg_timeout_acks in (1, 10, 100) or _bg_timeout_acks % 500 == 0:
+                        logger.warning(
+                            f"Phone bg ack came from the fallback timer, not a "
+                            f"confirmed paint ({_bg_timeout_acks} so far) — the "
+                            f"phone screen may be asleep or the tab backgrounded. "
+                            f"Backgrounds are not verified while this persists.")
                 if _bg_ready_event is not None:
                     _bg_ready_event.set()
             elif msg_type == "bg_hello":
