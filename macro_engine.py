@@ -2333,6 +2333,8 @@ class MacroEngine:
                             redone without disturbing good stacks on either side.
         """
         self._stop_after = stop_after_stack
+        # set by app.py from a resumed sequence.json; None = plan fresh
+        self._preset_path = getattr(self, '_preset_path', None)
         self._session    = session
         self._stop_event.clear()
         self.is_running  = True
@@ -2425,9 +2427,26 @@ class MacroEngine:
             angles  = [p[0] for p in g_pos]
             aux_pos = [p[1] for p in g_pos]
         else:
-            _orb    = orbit_positions(session)   # [(pan, tilt), ...]
-            angles  = [p[0] for p in _orb]
-            aux_pos = [p[1] for p in _orb]
+            # Replay recorded angles when resuming an interrupted orbit.
+            #
+            # Recomputing is not safe here: node placement depends on
+            # num_stacks, the pan and tilt ranges and the axis angle, so if any
+            # of those differ even slightly from the original run, "stack 25"
+            # lands somewhere the first 24 do not continue from and the orbit
+            # does not line up. sequence.json stores the exact arrays, so a
+            # resume replays them verbatim.
+            _preset = getattr(self, "_preset_path", None)
+            if _preset and _preset.get("angles"):
+                angles  = list(_preset["angles"])
+                aux_pos = list(_preset.get("aux") or [0.0] * len(angles))
+                if len(aux_pos) < len(angles):
+                    aux_pos += [0.0] * (len(angles) - len(aux_pos))
+                logger.info(f"↻ Replaying recorded path: {len(angles)} stack "
+                            f"positions from the original run (not recomputed)")
+            else:
+                _orb    = orbit_positions(session)   # [(pan, tilt), ...]
+                angles  = [p[0] for p in _orb]
+                aux_pos = [p[1] for p in _orb]
             # Log first 20 planned positions so we can verify the path order
             logger.info(f"📍 Planned orbit positions ({len(_orb)} stacks):")
             for _i, (_p, _t) in enumerate(_orb[:20]):

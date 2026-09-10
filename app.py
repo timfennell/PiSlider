@@ -8993,6 +8993,16 @@ async def websocket_endpoint(websocket: WebSocket):
                         _resume_from = max(0, int(msg.get("resume_from_stack", 0)))
                         # Optional upper bound, so a bad SECTION can be reshot
                         # without disturbing good stacks after it.
+                        # Recorded path from a resumed sequence.json, so the
+                        # continued stacks land exactly where the original run
+                        # would have put them.
+                        _pa = msg.get("preset_angles") or None
+                        _px = msg.get("preset_aux") or None
+                        macro_eng._preset_path = ({"angles": _pa, "aux": _px}
+                                                  if _pa else None)
+                        if _pa:
+                            logger.info(f"Macro resume: replaying {len(_pa)} recorded "
+                                        f"stack positions from sequence.json")
                         _sa = msg.get("stop_after_stack", None)
                         _stop_after = int(_sa) if _sa not in (None, "", 0) else None
                         if _resume_from > 0:
@@ -10276,6 +10286,71 @@ async def bg_phone_page():
     """Phone background-matte display page for triangulation matting."""
     with open("web/bg_phone.html") as f:
         return HTMLResponse(content=f.read())
+
+
+@app.get("/api/macro/project_info")
+async def macro_project_info(path: str):
+    """Look for an interrupted scan under `path` and report how to continue it.
+
+    Called when a save folder is chosen, so picking the folder of a scan that
+    stopped — power cut, E-stop, a background that drifted — surfaces the resume
+    point instead of the operator having to work it out from folder names.
+
+    Returns the stored angle arrays as well as the counts. A resume MUST replay
+    the recorded path rather than recompute it: node placement depends on
+    num_stacks, the pan and tilt ranges and the axis angle, so any of those
+    differing by a hair would put "stack 25" somewhere the first 24 do not
+    continue from, and the orbit would not line up.
+    """
+    import glob as _glob
+    root = Path(path)
+    if not root.exists():
+        return {"found": False, "reason": f"path does not exist: {path}"}
+
+    # Accept a project folder, an orbit folder, or a parent holding either.
+    cands = sorted(_glob.glob(str(root / "**" / "sequence.json"), recursive=True))
+    if not cands:
+        return {"found": False, "reason": "no sequence.json under that folder"}
+
+    out = []
+    for f in cands:
+        try:
+            d = json.loads(Path(f).read_text())
+        except Exception as e:
+            continue
+        rot   = d.get("rotation", {})
+        aux   = d.get("aux_axis", {})
+        rail  = d.get("rail", {})
+        stacks = d.get("stacks", [])
+        total = int(rot.get("num_stacks", 0) or 0)
+        # Resume from the first stack NOT marked complete, so a partially
+        # written stack is reshot rather than trusted.
+        done_ids = {s.get("stack_id") for s in stacks if s.get("completed")}
+        resume_from = 0
+        for i in range(total):
+            if f"stack_{i+1:03d}" not in done_ids:
+                resume_from = i
+                break
+        else:
+            resume_from = total
+        out.append({
+            "sequence_json": f,
+            "orbit_folder":  os.path.dirname(f),
+            "orbit_label":   d.get("orbit_label"),
+            "completed":     len(done_ids),
+            "total":         total,
+            "resume_from":   resume_from,
+            "finished":      resume_from >= total and total > 0,
+            "rail":          {k: v for k, v in rail.items() if not isinstance(v, list)},
+            "slots":         [s.get("label") for s in d.get("exposure_slots", [])],
+            "angles_deg":    rot.get("angles_deg", []),
+            "aux_positions_deg": aux.get("positions_deg", []),
+            "pan_axis_tilt_deg": d.get("rotation_axis_angle_deg"),
+        })
+    out.sort(key=lambda o: o["orbit_folder"])
+    unfinished = [o for o in out if not o["finished"]]
+    return {"found": True, "orbits": out,
+            "resumable": unfinished[0] if unfinished else None}
 
 
 @app.get("/api/bg_force")
