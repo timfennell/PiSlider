@@ -79,8 +79,8 @@ class MattingConfig:
     Alpha is computed offline from the pair or triplet.
     """
     enabled:         bool  = False
-    black_settle_ms: int   = 300   # OLED off → on settle (true black is instant; extra safety margin)
-    white_settle_ms: int   = 200   # white → black settle is slower — but black is captured first
+    black_settle_ms: int   = 200   # OLED off → on settle (true black is instant)
+    white_settle_ms: int   = 150   # white → black settle is slower — but black is captured first
     kelvin:          int   = 5500  # CT of the white background to match specimen lighting
 
 
@@ -104,7 +104,7 @@ class ExposureSlot:
     # kelvin sets the CT of white/grey; bg_brightness (0-100 %) dims the white
     # level for grey (50 = mid-tone grey card equivalent, ~18% reflectance).
     bg_color:         str   = ""
-    bg_settle_ms:     int   = 300   # ms to wait after bg transition before shutter
+    bg_settle_ms:     int   = 200   # ms to wait after bg transition before shutter
     # brightness is controlled manually on the phone — not commanded per-slot
 
 
@@ -199,8 +199,14 @@ class MacroSession:
     slots: List[ExposureSlot] = field(default_factory=lambda: [ExposureSlot()])
 
     # Timing
-    vibe_delay_s:   float = 0.5    # anti-vibration settle after each motor move
-    exp_margin_s:   float = 0.2    # extra wait after shutter for DNG write
+    # Timing defaults are tuned for throughput, because a full scan is now
+    # ~15 hours and these run 23,000 times. Each keeps margin over the physical
+    # effect it covers; see the note above run() for how to re-measure them.
+    vibe_delay_s:   float = 0.3    # anti-vibration settle after each motor move
+    # Covers shutter lag, not the exposure — the exposure itself is waited for
+    # separately as shutter_s. motion_shutter_lag_ms records the measured Sony
+    # USB lag as 80 ms, so 120 ms is 50% headroom over the known figure.
+    exp_margin_s:   float = 0.12   # shutter-lag margin on top of shutter_s
 
     # Camera source (mirrors main app state)
     active_camera:  str  = "picam"
@@ -2719,6 +2725,38 @@ class MacroEngine:
         logger.info(f"  Images/Stack: {session.images_per_stack} | Stacks: {session.num_stacks}")
         logger.info(f"  Total Frames: {session.num_stacks * session.images_per_stack}")
 
+        # Timing budget, measured from a real scan's file timestamps:
+        #
+        #   slot -> slot at one rail position   2.0 s
+        #   rail moves to the next position     3.0 s
+        #
+        # Of a ~7 s three-slot position, only ~2 s was ever ours to spend; the
+        # rest is the shutter and the 24 MB USB download. The three tunables and
+        # what each actually covers:
+        #
+        #   exp_margin_s   shutter LAG, not the exposure — that is waited for
+        #                  separately as shutter_s. state's motion_shutter_lag_ms
+        #                  records the Sony USB lag as 80 ms, so 120 ms is 50%
+        #                  headroom over a measured number. Failure is loud: a
+        #                  capture error.
+        #   bg_settle_ms   the phone finishing its background transition. A
+        #                  websocket hop plus two or three 60 Hz frames is well
+        #                  under 100 ms; the margin above that is for OLED
+        #                  brightness limiting settling after a large white area.
+        #                  Failure is SILENT — a frame caught mid-transition
+        #                  poisons that frame's alpha and nothing reports it.
+        #   vibe_delay_s   the tripod and arm ringing down after a rail step.
+        #                  The step is ~0.2 mm; what rings is the assembly, not
+        #                  the rail. Failure is quiet — soft frames the defocus
+        #                  filter may then reject, costing the frame anyway.
+        #
+        # To re-measure rather than inherit these:
+        #   bg_settle  - no specimen, background white, capture at 300/200/150/
+        #                100/50 ms and diff each against the 300 ms frame. The
+        #                floor is where they start to differ.
+        #   vibe_delay - one rail position, capture at 0.5/0.35/0.25/0.15/0.05
+        #                and score sharpness. The floor is where it drops.
+        #
         # Warn before the shutter moves, not after the reconstruction fails.
         # Under-sampling costs a whole scan: bee 5 ran 3 hours of capture and a
         # further 3 of matting and stacking before COLMAP could say it was
