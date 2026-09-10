@@ -8954,6 +8954,19 @@ async def websocket_endpoint(websocket: WebSocket):
                         # stacks") but app.py only ever called run(sess), so the
                         # capability was unreachable: any interruption meant
                         # re-shooting the whole orbit.
+                        # Starting a sequence is a deliberate operator action, so it
+                        # clears any E-stop latch. Without this, stopping a scan
+                        # (macro_stop calls emergency_stop) left the latch set, and
+                        # the engine's enable_motors(True) was then refused — the
+                        # next scan would run its loop while the drivers stayed
+                        # de-energised, which looks like the rig ignoring you.
+                        if hw.estop.is_set():
+                            logger.warning("Macro start: clearing E-stop latch and re-enabling drivers")
+                            await broadcast({"type": "log",
+                                "msg": "⚠ E-stop latch cleared for sequence start — drivers re-enabled."})
+                        hw.clear_estop()
+                        hw.enable_motors(True)
+
                         _resume_from = max(0, int(msg.get("resume_from_stack", 0)))
                         if _resume_from > 0:
                             logger.info(f"Macro RESUME: skipping the first {_resume_from} "
