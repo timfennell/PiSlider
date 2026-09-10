@@ -2064,6 +2064,7 @@ function handleIncomingData(data) {
     if (data.type === "macro_lens_profiles") { handleMacroLensProfiles(data); return; }
     if (data.type === "macro_easing_curves") { handleMacroEasingCurves(data); return; }
     if (data.type === "macro_grid_computed") { handleMacroGridComputed(data); return; }
+    if (data.type === "macro_paused") { _applyPauseUI(!!data.paused); return; }
     if (data.type === "bg_phone_state") { handleBgPhoneState(data.connected); return; }
 
     // ── Hardware reference zero ────────────────────────────────────────────
@@ -4045,6 +4046,31 @@ function captureFlats() {
     sendCmd('capture_flats', { slots });
 }
 
+
+// ─── Macro pause ────────────────────────────────────────────────────────────────
+let _macroPaused = false;
+
+function macroTogglePause() {
+    _macroPaused = !_macroPaused;
+    sendCmd(_macroPaused ? 'macro_pause' : 'macro_unpause', {});
+    _applyPauseUI(_macroPaused);
+}
+
+function _applyPauseUI(paused) {
+    _macroPaused = paused;
+    const b = document.getElementById('macroPauseBtn');
+    if (!b) return;
+    b.textContent = paused ? '▶ Resume' : '⏸ Pause';
+    b.style.background = paused ? 'var(--accent-amber, #b8860b)' : 'var(--panel-dark)';
+    b.style.color = paused ? '#000' : '';
+}
+
+// Show the pause control only while a sequence is actually running.
+function macroSetRunning(running) {
+    const b = document.getElementById('macroPauseBtn');
+    if (b) b.style.display = running ? '' : 'none';
+    if (!running) _applyPauseUI(false);
+}
 
 // ─── BG PHONE QR ────────────────────────────────────────────────────────────────
 let _bgPhoneCount = 0;

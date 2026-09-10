@@ -2239,6 +2239,11 @@ class MacroEngine:
         self._pos         = pos_fn
         self._bg_baseline = None   # R/B of the matting background, set on first capture
         self._stop_event  = asyncio.Event()
+        # Set = running. Cleared = paused. A pause holds the loop at a frame
+        # boundary rather than mid-capture, so no motor moves and no partial
+        # file is left behind — the scan simply waits.
+        self._pause_event = asyncio.Event()
+        self._pause_event.set()
         self.is_running   = False
 
         # Runtime state (also used for resume)
@@ -2258,6 +2263,35 @@ class MacroEngine:
 
     def stop(self):
         self._stop_event.set()
+        self._pause_event.set()      # never leave a stopped run parked in a wait
+
+    def pause(self):
+        """Hold at the next frame boundary. Position and progress are kept."""
+        self._pause_event.clear()
+        logger.info("⏸ Macro pause requested — will hold at the next frame boundary")
+
+    def unpause(self):
+        """Continue a paused run from exactly where it stopped."""
+        self._pause_event.set()
+        logger.info("▶ Macro resumed")
+
+    @property
+    def is_paused(self) -> bool:
+        return not self._pause_event.is_set()
+
+    async def _wait_if_paused(self):
+        """Block here while paused. Returns False if we were stopped instead."""
+        if self._pause_event.is_set():
+            return True
+        logger.info("⏸ Paused — holding position")
+        await self._broadcast({"type": "log", "msg": "⏸ Paused — holding position."})
+        while not self._pause_event.is_set():
+            if self._stop_event.is_set():
+                return False
+            await asyncio.sleep(0.2)
+        logger.info("▶ Resuming")
+        await self._broadcast({"type": "log", "msg": "▶ Resumed."})
+        return True
 
     def get_resume_info(self) -> Optional[Dict]:
         """
@@ -2281,12 +2315,17 @@ class MacroEngine:
         return None
 
     async def run(self, session: MacroSession,
-                  resume_from_stack: int = 0) -> None:
+                  resume_from_stack: int = 0,
+                  stop_after_stack: Optional[int] = None) -> None:
         """
         Main entry point.  Call from app.py via asyncio.create_task().
 
         resume_from_stack: 0 = fresh start, N = skip first N stacks
+        stop_after_stack:   None = run to the end, N = stop after stack index N-1.
+                            Together these reshoot a RANGE, so a bad section can be
+                            redone without disturbing good stacks on either side.
         """
+        self._stop_after = stop_after_stack
         self._session    = session
         self._stop_event.clear()
         self.is_running  = True
@@ -2556,7 +2595,14 @@ class MacroEngine:
         frames_per_stack = rail_frame_count(session)
         enabled_slots    = [s for s in session.slots if s.enabled]
 
-        for stack_idx in range(resume_from, session.num_stacks):
+        _end = session.num_stacks
+        if getattr(self, '_stop_after', None) is not None:
+            _end = max(resume_from, min(_end, int(self._stop_after)))
+            logger.info(f"Macro range: stacks {resume_from}..{_end-1} "
+                        f"(of {session.num_stacks}) — others left untouched")
+        for stack_idx in range(resume_from, _end):
+            if not await self._wait_if_paused():
+                break
             if self._stop_event.is_set():
                 break
 
@@ -2671,6 +2717,11 @@ class MacroEngine:
 
             for frame_idx in range(frames_per_stack):
                 if self._stop_event.is_set():
+                    break
+                # Pause at the frame boundary too, not just between stacks: a
+                # stack is ~2.5 minutes, which is far too long to wait for a
+                # pause to take effect when something is going wrong.
+                if not await self._wait_if_paused():
                     break
 
                 target_mm    = float(traj_rail[frame_idx])
@@ -2883,7 +2934,14 @@ class MacroEngine:
         n_total          = len(positions)
         enabled_slots    = [s for s in session.slots if s.enabled]
 
-        for stack_idx in range(resume_from, n_total):
+        _end = n_total
+        if getattr(self, '_stop_after', None) is not None:
+            _end = max(resume_from, min(_end, int(self._stop_after)))
+            logger.info(f"Macro range: stacks {resume_from}..{_end-1} "
+                        f"(of {n_total}) — others left untouched")
+        for stack_idx in range(resume_from, _end):
+            if not await self._wait_if_paused():
+                break
             if self._stop_event.is_set():
                 break
 
@@ -2961,6 +3019,11 @@ class MacroEngine:
 
             for frame_idx in range(frames_per_stack):
                 if self._stop_event.is_set():
+                    break
+                # Pause at the frame boundary too, not just between stacks: a
+                # stack is ~2.5 minutes, which is far too long to wait for a
+                # pause to take effect when something is going wrong.
+                if not await self._wait_if_paused():
                     break
 
                 target_mm    = float(traj_rail[frame_idx])

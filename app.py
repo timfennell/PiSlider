@@ -8968,6 +8968,10 @@ async def websocket_endpoint(websocket: WebSocket):
                         hw.enable_motors(True)
 
                         _resume_from = max(0, int(msg.get("resume_from_stack", 0)))
+                        # Optional upper bound, so a bad SECTION can be reshot
+                        # without disturbing good stacks after it.
+                        _sa = msg.get("stop_after_stack", None)
+                        _stop_after = int(_sa) if _sa not in (None, "", 0) else None
                         if _resume_from > 0:
                             logger.info(f"Macro RESUME: skipping the first {_resume_from} "
                                         f"stack(s), shooting {_resume_from}..{sess.num_stacks-1}")
@@ -8978,7 +8982,9 @@ async def websocket_endpoint(websocket: WebSocket):
                         async def _macro_run():
                             try:
                                 logger.info("Macro run started, calling macro_eng.run()...")
-                                await macro_eng.run(sess, resume_from_stack=_resume_from)
+                                await macro_eng.run(sess,
+                                                    resume_from_stack=_resume_from,
+                                                    stop_after_stack=_stop_after)
                                 logger.info("Macro run completed successfully")
                             except (FileNotFoundError, PermissionError, OSError) as e:
                                 # Path/filesystem errors
@@ -9085,6 +9091,21 @@ async def websocket_endpoint(websocket: WebSocket):
                                 await broadcast({"type": "run_state", "running": False})
 
                         asyncio.create_task(_run_flats())
+
+            elif cmd == "macro_pause":
+                # Hold at the next frame boundary. No motors move, nothing is
+                # written half-finished, and position/progress are kept — this is
+                # explicitly NOT a stop, so the run continues where it left off.
+                if _macro_eng is not None:
+                    _macro_eng.pause()
+                    await broadcast({"type": "log",
+                        "msg": "⏸ Pause requested — holding at the next frame."})
+                    await broadcast({"type": "macro_paused", "paused": True})
+
+            elif cmd == "macro_unpause":
+                if _macro_eng is not None:
+                    _macro_eng.unpause()
+                    await broadcast({"type": "macro_paused", "paused": False})
 
             elif cmd == "macro_stop":
                 # Cut motion unconditionally, even if the task is already gone.
