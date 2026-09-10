@@ -8869,10 +8869,28 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.send_json({"type":"log","msg":f"Macro calc error: {e}"})
 
             elif cmd == "macro_start":
-                logger.info(f"macro_start received: is_running={state['is_running']}")
-                if state["is_running"]:
+                # Ask the ENGINE whether it is still running, not just the flag.
+                #
+                # macro_stop clears state["is_running"] the moment Stop is
+                # pressed, but the engine only notices its stop event at a frame
+                # boundary. With a wedged camera each frame takes a 45 s
+                # timeout, so that boundary can be a minute away — and the flag
+                # says "idle" the whole time. Pressing Start in that window
+                # passed this guard and left TWO capture loops running against
+                # one camera, interleaving frames from different stacks into the
+                # same folders. Observed exactly that: global frames 6,7,8 and
+                # 49,50,51 landing alternately.
+                #
+                # The engine's own is_running survives until its finally block,
+                # and a task that is not done() is definitive.
+                _eng_busy = bool(_macro_eng is not None and getattr(_macro_eng, "is_running", False))
+                _task_busy = bool(_macro_task is not None and not _macro_task.done())
+                logger.info(f"macro_start received: is_running={state['is_running']} "
+                            f"engine_busy={_eng_busy} task_busy={_task_busy}")
+                if state["is_running"] or _eng_busy or _task_busy:
                     await websocket.send_json({"type":"log",
-                        "msg":"⚠ Cannot start macro — another sequence is running."})
+                        "msg":"⚠ Cannot start macro — the previous sequence is still "
+                              "shutting down. Wait for it to report finished, then start."})
                 elif not _is_external_save_path(state.get("save_path", "")):
                     await websocket.send_json({"type":"log",
                         "msg":"⛔ Macro refused — save path is not set.\n"
