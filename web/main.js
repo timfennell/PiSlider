@@ -3678,20 +3678,68 @@ function macroCalc() {
     //
     // Reference: 72 stacks for full sphere coverage (empirically chosen as minimum for
     // COLMAP to find sufficient feature overlap). Scales proportionally for partial coverage.
-    const panAxisTiltDeg = parseFloat(document.getElementById('macro_rot_axis_angle')?.value ?? 90);
-    const alpha = Math.PI / 2 - panAxisTiltDeg * Math.PI / 180;
-    let tiltMin = -90, tiltMax = 90;
-    if (_macroTiltMode === 'limited') {
-        tiltMin = parseFloat(document.getElementById('macro_tilt_soft_min')?.value ?? -90);
-        tiltMax = parseFloat(document.getElementById('macro_tilt_soft_max')?.value ?? 90);
+    // PAN IS LATITUDE, NOT AZIMUTH.
+    //
+    // From the rig kinematics, v = (sin pan, -cos pan sin tilt, -cos pan cos tilt),
+    // so pan alone sets v_x. The old model here had the two axes the other way
+    // round and treated pan as an azimuth needing 360° for full coverage. It was
+    // wrong in both directions: pan -90..+90 with free tilt reaches 95% of the
+    // sphere and was scored 50%, while pan 0..360 reaches only 50% (past ±90 pan
+    // just repeats latitudes) and was scored 100%.
+    //
+    // It also anchored on "72 stacks for a full sphere", which is far too few.
+    // What decides reconstruction is the angle between NEIGHBOURING views;
+    // measured on a real scan, 77% of pairs under 20° apart verified, 17% at
+    // 20-30°, and none past 30°. Even sampling of a band of area A at spacing s
+    // needs N = A/s², so a full sphere at 15° is 183 nodes, not 72.
+    //
+    // Together those errors under-called by about 5x: a pan -24..+70 scan was
+    // told 19 stacks when 15° spacing over that band needs 123.
+    let panLo = -90, panHi = 90;
+    if (_macroRotMode === 'range' && _macroRotStart !== null && _macroRotEnd !== null) {
+        panLo = Math.min(_macroRotStart, _macroRotEnd);
+        panHi = Math.max(_macroRotStart, _macroRotEnd);
     }
-    const tiltMinRad = tiltMin * Math.PI / 180;
-    const tiltMaxRad = tiltMax * Math.PI / 180;
-    const sphericalCoverage = Math.abs(Math.sin(tiltMaxRad + alpha) - Math.sin(tiltMinRad + alpha));
-    const coverageFraction = (panRange / 360) * sphericalCoverage / 2;
-    const recommendedStacks = Math.max(4, Math.round(coverageFraction * 72));
+    // Latitude band the pan range actually reaches (mirrors pan_band() in
+    // macro_engine.py — clipped to ±180 because pan normalises into that, and
+    // picking up ±1 when the range crosses a pole).
+    panLo = Math.max(panLo, -180); panHi = Math.min(panHi, 180);
+    const sins = [Math.sin(panLo * Math.PI / 180), Math.sin(panHi * Math.PI / 180)];
+    if (panLo <= -90 && -90 <= panHi) sins.push(-1);
+    if (panLo <=  90 &&  90 <= panHi) sins.push(1);
+    const uSpan = Math.max(0, Math.max(...sins) - Math.min(...sins));
+    const bandArea = 2 * Math.PI * uSpan;                 // steradians
+    const coverageFraction = uSpan / 2;                   // of the whole sphere
+
+    // Nodes for 15°, comfortably inside the measured matching window.
+    const TARGET_SPACING_DEG = 15;
+    const sRad = TARGET_SPACING_DEG * Math.PI / 180;
+    // ceil, not round: rounding down leaves the recommended count fractionally
+    // over the target spacing, so the app's own advice reads as 'usable'.
+    const recommendedStacks = Math.max(4, Math.ceil(bandArea / (sRad * sRad)));
     const rs = document.getElementById('macro_recommended_stacks');
     if (rs) rs.innerText = recommendedStacks;
+
+    // Spacing the chosen stack count will actually deliver, colour-coded
+    // against the measured falloff so it can be judged before shooting.
+    const sd = document.getElementById('macro_spacing_disp');
+    if (sd) {
+        if (numStacks > 0 && uSpan > 0) {
+            const spacing = Math.sqrt(bandArea / numStacks) * 180 / Math.PI;
+            let colour = 'var(--accent-teal)', note = '';
+            if (spacing > 30)      { colour = '#ff5c5c'; note = ' — will not match'; }
+            else if (spacing > 20) { colour = '#ffb020'; note = ' — marginal'; }
+            else if (spacing > 15) { colour = '#ffd24a'; note = ' — usable'; }
+            else                   { note = ' — good'; }
+            sd.style.color = colour;
+            sd.innerHTML = `${spacing.toFixed(1)}°${note}<br>` +
+                `<span style="font-size:0.7rem;color:var(--text-dim)">` +
+                `covers ${(coverageFraction * 100).toFixed(0)}% of sphere · ` +
+                `${recommendedStacks} for 15°</span>`;
+        } else {
+            sd.innerHTML = '—';
+        }
+    }
 
     // Summary calculations
     const totalImages = imagesPerStack * numStacks * stereoMultiplier * Math.max(1, slots);
@@ -3927,6 +3975,11 @@ function macroStart() {
         rotation_start_deg: _macroRotStart ?? 0,
         rotation_end_deg: _macroRotEnd ?? 360,
         num_stacks: parseInt(document.getElementById('macro_num_stacks')?.value || 36),
+        // Node placement. The dropdown folds the double-helix variant into the
+        // same control, since it is a flavour of helix rather than a third path.
+        path_style: (document.getElementById('macro_path_style')?.value || 'helix')
+                        === 'geodesic' ? 'geodesic' : 'helix',
+        helix_double: (document.getElementById('macro_path_style')?.value || '') === 'helix_double',
         // 0 = fresh orbit. N = skip the first N stacks (resume after an interruption).
         resume_from_stack: parseInt(document.getElementById('macro_resume_from')?.value || 0),
         // Recorded angles from an interrupted orbit's sequence.json. Replaying

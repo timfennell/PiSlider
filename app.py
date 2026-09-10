@@ -696,6 +696,8 @@ def _build_macro_session(msg: dict) -> "MacroSession":
         pan_cols             = int(msg.get("pan_cols",      4)),
         tilt_rows            = int(msg.get("tilt_rows",     3)),
         grid_snake           = bool(msg.get("grid_snake",   True)),
+        path_style           = str(msg.get("path_style",   "helix")).lower(),
+        helix_double         = bool(msg.get("helix_double", False)),
         pan_axis_tilt_deg    = float(msg.get("pan_axis_tilt_deg", 90.0)),
         orbit_number         = int(msg.get("orbit_number",   1)),
         orbit_notes          = msg.get("orbit_notes",        ""),

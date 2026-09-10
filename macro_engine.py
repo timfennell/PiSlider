@@ -136,6 +136,10 @@ class MacroSession:
     tilt_rows:      int  = 3         # rows along tilt axis
     grid_snake:     bool = True      # snake (boustrophedon) row order to minimise travel
 
+    # Node placement for sphere scans. See plan_scan_nodes().
+    path_style:     str  = "helix"   # helix | geodesic
+    helix_double:   bool = False     # helix: second pass back down the band
+
     # Rig geometry for COLMAP pose computation
     pan_axis_tilt_deg: float = 90.0  # pan shaft tilt from vertical toward camera (degrees)
                                      # 90° = vertical axis (default), <90° = tilted toward camera
@@ -705,20 +709,46 @@ def _serpentine_motor_order(kept):
 # spacing, right on the cliff edge, and the match graph came out in 8 pieces.
 
 
+def pan_band(pan_lo_deg: float, pan_hi_deg: float):
+    """Latitude band (u = sin(pan)) a pan range can actually reach, as (u0, u1).
+
+    Two things stop this being sin() of the endpoints.
+
+    motors_for_viewpoint() normalises pan into (-180, 180], so a range written
+    as 0..360 is filtered against pan values that never exceed 180 — the top
+    half of the range selects nothing.
+
+    And sin() is not monotonic: pan beyond ±90 revisits latitudes already
+    covered. pan=100 with tilt t is the same viewpoint as pan=80 with tilt t+180,
+    since v = (sin pan, -cos pan sin tilt, -cos pan cos tilt) and the sign flip
+    in cos(pan) is absorbed by half a turn of tilt. So a 0..360 pan range does
+    NOT cover the sphere — it covers one hemisphere, twice. Measured against the
+    reachability test: 50.0%.
+    """
+    lo = max(min(pan_lo_deg, pan_hi_deg), -180.0)
+    hi = min(max(pan_lo_deg, pan_hi_deg),  180.0)
+    if hi < lo:
+        return 0.0, 0.0
+    us = [math.sin(math.radians(lo)), math.sin(math.radians(hi))]
+    if lo <= -90.0 <= hi:
+        us.append(-1.0)
+    if lo <=  90.0 <= hi:
+        us.append(1.0)
+    return min(us), max(us)
+
+
 def helix_node_count(pan_lo_deg: float, pan_hi_deg: float,
                      spacing_deg: float) -> int:
     """Nodes needed to sample a pan band at a given neighbour spacing."""
-    u0 = math.sin(math.radians(min(pan_lo_deg, pan_hi_deg)))
-    u1 = math.sin(math.radians(max(pan_lo_deg, pan_hi_deg)))
-    s  = math.radians(max(0.1, spacing_deg))
-    return max(1, int(round(2.0 * math.pi * (u1 - u0) / (s * s))))
+    u0, u1 = pan_band(pan_lo_deg, pan_hi_deg)
+    s = math.radians(max(0.1, spacing_deg))
+    return max(1, int(math.ceil(2.0 * math.pi * (u1 - u0) / (s * s))))
 
 
 def helix_spacing_deg(pan_lo_deg: float, pan_hi_deg: float, n: int) -> float:
     """The inverse: neighbour spacing that n nodes will actually achieve."""
-    u0 = math.sin(math.radians(min(pan_lo_deg, pan_hi_deg)))
-    u1 = math.sin(math.radians(max(pan_lo_deg, pan_hi_deg)))
-    h  = (u1 - u0) / max(1, int(n))
+    u0, u1 = pan_band(pan_lo_deg, pan_hi_deg)
+    h = (u1 - u0) / max(1, int(n))
     return math.degrees(math.sqrt(2.0 * math.pi * max(h, 0.0)))
 
 
@@ -746,8 +776,10 @@ def helix_nodes(n: int, pan_lo_deg: float, pan_hi_deg: float,
     instead (a serpentine), keeping the even spacing but giving up the return.
     """
     n = max(1, int(n))
-    lo, hi = min(pan_lo_deg, pan_hi_deg), max(pan_lo_deg, pan_hi_deg)
-    u0, u1 = math.sin(math.radians(lo)), math.sin(math.radians(hi))
+    u0, u1 = pan_band(pan_lo_deg, pan_hi_deg)
+    # asin() puts every node in [-90, 90], which costs no coverage: pan past a
+    # pole only repeats latitudes. See pan_band().
+    lo, hi = math.degrees(math.asin(u0)), math.degrees(math.asin(u1))
     if u1 - u0 < 1e-9:
         return [(lo, (i * 360.0 / n) - 180.0) for i in range(n)]
 

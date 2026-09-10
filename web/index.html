@@ -1516,6 +1516,26 @@
                     </div>
                 </div>
 
+                <!-- Node placement. What decides whether COLMAP can reconstruct is
+                     how far apart NEIGHBOURING views are: measured on a real scan,
+                     77% of image pairs under 20° apart verified, 17% at 20-30°, and
+                     none past 30°. The readout below turns the stack count into that
+                     number so it can be checked before shooting rather than after. -->
+                <div class="row">
+                    <div class="control-item half">
+                        <label title="Helix: one continuous wound path, every consecutive node the same distance apart. Geodesic: evenly scattered nodes joined by a serpentine, which has to jump between bands.">Scan path</label>
+                        <select id="macro_path_style" onchange="macroCalc()">
+                            <option value="helix" selected>Helix (single pass)</option>
+                            <option value="helix_double">Helix (double, returns to start)</option>
+                            <option value="geodesic">Geodesic + serpentine</option>
+                        </select>
+                    </div>
+                    <div class="control-item half">
+                        <label title="Angular distance between neighbouring viewpoints. Feature matching falls off sharply past 20°, so aim for 15° or less.">Node spacing</label>
+                        <div id="macro_spacing_disp" style="font-size:0.85rem; padding:6px 0; color:var(--accent-teal);">—</div>
+                    </div>
+                </div>
+
                 <!-- Resume detection. Reads sequence.json under the save folder so an
                      interrupted scan is recognised instead of the operator having to
                      work the resume point out from folder names. -->
