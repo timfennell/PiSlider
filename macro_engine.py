@@ -2580,6 +2580,12 @@ class MacroEngine:
         self._pause_event = asyncio.Event()
         self._pause_event.set()
         self.is_running   = False
+        # Consecutive failed captures. A wedged camera returns None for every
+        # frame, and nothing used to count them: a scan ran 90 minutes and
+        # produced 3 files because the loop kept marching through a camera that
+        # had stopped answering. See the abort in the slot loop.
+        self._consec_fail = 0
+        self.MAX_CONSEC_FAIL = 3
 
         # Runtime state (also used for resume)
         self._session:     Optional[MacroSession] = None
@@ -3218,6 +3224,34 @@ class MacroEngine:
                         await self._bg(slot.bg_color, slot.kelvin, slot.bg_settle_ms)
 
                     file_path = await self._capture(slot_dir, frame_id, slot)
+
+                    # Stop early when the camera has stopped answering.
+                    #
+                    # A wedged Sony returns None for every frame while gphoto2
+                    # burns its full timeout on each one — 45 s a frame, so a
+                    # scan can look alive for hours and write almost nothing.
+                    # Measured: 90 minutes, 3 files, 233 stacks still to go. A
+                    # USB reset does NOT clear this (verified: re-enumeration
+                    # succeeds, the next capture still times out); only power
+                    # cycling the camera does. So the useful thing is to give up
+                    # quickly and say what to do, while resume picks up the rest.
+                    if file_path:
+                        self._consec_fail = 0
+                    else:
+                        self._consec_fail += 1
+                        logger.warning(
+                            f"Capture returned no file "
+                            f"({self._consec_fail}/{self.MAX_CONSEC_FAIL} consecutive)")
+                        if self._consec_fail >= self.MAX_CONSEC_FAIL:
+                            msg = (f"✗ Camera stopped responding — {self._consec_fail} "
+                                   f"captures in a row produced no file. Aborting at "
+                                   f"stack {stack_idx+1}.\n"
+                                   f"Power-cycle the camera (a USB replug does not clear "
+                                   f"this), then resume from stack {stack_idx+1}.")
+                            logger.error(msg.replace("\n", " "))
+                            await self._broadcast({"type": "log", "msg": msg})
+                            self._stop_event.set()
+                            return
 
                     # Collect JPEG preview path for macro-graph flipbook.
                     # For Sony USB the download runs in the background, so the
