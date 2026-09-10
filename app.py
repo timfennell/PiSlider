@@ -56,7 +56,7 @@ from macro_engine import (MacroEngine, MacroSession, ExposureSlot, LensProfile,
                           rail_frame_count, total_image_count, estimated_storage_gb,
                           depth_per_image_um, num_stacks_grid, effective_pixel_um,
                           compute_geodesic_grid, stereo_multiplier,
-                          generate_scan_positions)
+                          generate_scan_positions, orbit_number_from_label)
 from cinematic_engine import (SoftLimitGuard, InertiaEngine, ArcTanTracker,
                                ProgrammedMove, MoveLibrary, Keyframe, RIG_PRESETS,
                                NUDGE_SPEED_PAN, NUDGE_SPEED_TILT, NUDGE_SPEED_SLIDER,
@@ -703,7 +703,11 @@ def _build_macro_session(msg: dict) -> "MacroSession":
         path_style           = str(msg.get("path_style",   "helix")).lower(),
         helix_double         = bool(msg.get("helix_double", False)),
         pan_axis_tilt_deg    = float(msg.get("pan_axis_tilt_deg", 90.0)),
-        orbit_number         = int(msg.get("orbit_number",   1)),
+        # Derived from the label unless explicitly given: the UI collects the
+        # label only, and orbit_number gates the merged multi-orbit export.
+        orbit_number         = int(msg.get("orbit_number",
+                                   orbit_number_from_label(
+                                       msg.get("orbit_label", "orbit_001")))),
         orbit_notes          = msg.get("orbit_notes",        ""),
         use_lego_mount       = bool(msg.get("use_lego_mount",  False)),
         lego_rotation_deg    = float(msg.get("lego_rotation_deg", 0.0)),

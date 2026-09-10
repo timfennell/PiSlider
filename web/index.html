@@ -1452,8 +1452,10 @@
                         <input type="text" id="macro_project_name" value="macro_project" oninput="macroCalc()">
                     </div>
                     <div class="control-item half">
-                        <label>Orbit Label</label>
-                        <input type="text" id="macro_orbit_label" value="orbit_001">
+                        <label title="One orbit = one mounting of the specimen. To cover the patch the pin hides, finish orbit_001, re-glue the specimen in a new position, set this to orbit_002 and shoot again with the same Project Name. The trailing number is the orbit index — orbit_002 and later trigger the merged multi-orbit COLMAP export.">Orbit Label</label>
+                        <input type="text" id="macro_orbit_label" value="orbit_001"
+                               pattern=".*[0-9]$"
+                               title="Must end in a number — that number is the orbit index. orbit_001, orbit_002, …">
                     </div>
                 </div>
 

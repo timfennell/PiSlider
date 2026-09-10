@@ -26,6 +26,7 @@ import json
 import logging
 import math
 import os
+import re
 import datetime
 from dataclasses import dataclass, field, asdict
 from typing import Optional, List, Dict, Any, Callable
@@ -1865,9 +1866,49 @@ def _R_to_quat(R: "np.ndarray"):
 
 # ─── FOLDER / JSON HELPERS ───────────────────────────────────────────────────
 
+def orbit_number_from_label(orbit_label: str) -> int:
+    """Orbit index parsed from its label: orbit_002 -> 2.
+
+    The label is the only orbit identity the UI collects, so the number is
+    derived from it rather than asked for twice. Without this orbit_number was
+    always 1, and the merged multi-orbit COLMAP export is gated on > 1, so it
+    could never run — the second orbit of a specimen was captured and then
+    never combined with the first.
+    """
+    m = re.search(r"(\d+)\s*$", str(orbit_label or ""))
+    return max(1, int(m.group(1))) if m else 1
+
+
 def project_folder(session: MacroSession) -> str:
+    """Folder for this project, reused across days.
+
+    The name used to be stamped with today's date unconditionally. A second
+    orbit is usually shot on a different day — the specimen has to be unmounted,
+    re-glued and re-framed — and that silently started a NEW project: a fresh
+    project.json holding only the new orbit, with nothing tying it to the first.
+    The merge reads project.json's orbit list, so it would have found one orbit
+    and produced nothing.
+
+    An existing folder for the same project name is therefore reused, most
+    recent first. A genuinely new project just needs a name that isn't taken.
+    """
     date_str = datetime.datetime.now().strftime("%Y-%m-%d")
-    return os.path.join(session.save_path, f"{session.project_name}_{date_str}")
+    todays = os.path.join(session.save_path, f"{session.project_name}_{date_str}")
+    if os.path.isdir(todays):
+        return todays
+    try:
+        prefix = f"{session.project_name}_"
+        existing = sorted(
+            (d for d in os.listdir(session.save_path)
+             if d.startswith(prefix)
+             and os.path.isdir(os.path.join(session.save_path, d, ""))
+             and re.fullmatch(r"\d{4}-\d{2}-\d{2}", d[len(prefix):])),
+            reverse=True)
+        if existing:
+            return os.path.join(session.save_path, existing[0])
+    except OSError:
+        pass
+    return todays
 
 
 def orbit_folder(proj_folder: str, orbit_label: str) -> str:
