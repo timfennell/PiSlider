@@ -660,10 +660,34 @@ def plan_geodesic_nodes(session: MacroSession) -> List[Dict[str, Any]]:
     axis  = float(getattr(session, "pan_axis_tilt_deg", 90.0))
     pan_lo = min(session.rotation_start_deg, session.rotation_end_deg)
     pan_hi = max(session.rotation_start_deg, session.rotation_end_deg)
-    e_lo   = float(getattr(session, "aux_start_deg", -60.0))
-    e_hi   = float(getattr(session, "aux_end_deg",    60.0))
-    if e_hi < e_lo:
-        e_lo, e_hi = e_hi, e_lo
+    # aux_start/aux_end are TILT MOTOR limits, not sphere elevation.
+    #
+    # fibonacci_nodes() samples uniformly in sin(elevation), and elevation only
+    # spans ±90°. Feeding it motor limits directly is wrong, and silently so:
+    # a free 360° tilt axis gives -180°..+180°, and sin(-180) == sin(+180) == 0,
+    # which collapses the band to the single circle z = 0. Every node then lands
+    # on one ring and the "geodesic" distribution comes out as an arc.
+    #
+    # A tilt axis that can turn at least half a revolution can point the
+    # specimen anywhere, so the whole sphere is available; anything narrower is
+    # clamped into the elevation domain.
+    t_lo = float(getattr(session, "aux_start_deg", -60.0))
+    t_hi = float(getattr(session, "aux_end_deg",    60.0))
+    if t_hi < t_lo:
+        t_lo, t_hi = t_hi, t_lo
+
+    if (t_hi - t_lo) >= 179.0:
+        e_lo, e_hi = -90.0, 90.0
+    else:
+        e_lo = max(-90.0, min(90.0, t_lo))
+        e_hi = max(-90.0, min(90.0, t_hi))
+        if e_hi - e_lo < 1.0:
+            # Degenerate after clamping — nodes could only lie on one circle.
+            raise RuntimeError(
+                f"Tilt range [{t_lo:.1f}°, {t_hi:.1f}°] gives an elevation band "
+                f"only {e_hi - e_lo:.1f}° wide, so scan nodes cannot spread over "
+                "the sphere. Widen the tilt range, or set tilt to full 360°."
+            )
 
     # Distribute over the REACHABLE set, not over the whole sphere.
     #
@@ -3086,6 +3110,14 @@ class MacroEngine:
 
         # Update internal MacroEngine rail position
         self.rail_pos_steps = target_steps
+        # Push the rail position out too. It was tracked only inside this engine,
+        # so slider_axis.current_steps went stale the moment a scan moved the
+        # rail — the same failure that made the engine believe pan was at 0°.
+        if self._pos is not None:
+            try:
+                self._pos(self.pan_pos_deg, self.tilt_pos_deg, self.rail_pos_steps)
+            except Exception as e:
+                logger.warning(f"rail position write-back failed: {e}")
         # Do NOT disable motors here – they stay enabled for the whole macro run.
 
         # Do NOT disable motors here — hold torque is required between focus steps
@@ -3184,7 +3216,7 @@ class MacroEngine:
         self.tilt_pos_deg = new_tilt
         if self._pos is not None:
             try:
-                self._pos(new_pan, new_tilt)
+                self._pos(new_pan, new_tilt, self.rail_pos_steps)
             except Exception as e:
                 logger.warning(f"position write-back failed: {e}")
 

@@ -8832,7 +8832,8 @@ async def websocket_endpoint(websocket: WebSocket):
                             _stop_sony_usb_liveview()
                             await asyncio.sleep(0.5)   # let the thread exit cleanly
 
-                        def _macro_pos_writeback(pan_deg: float, tilt_deg: float):
+                        def _macro_pos_writeback(pan_deg: float, tilt_deg: float,
+                                                 rail_steps: int = None):
                             """Keep the live axis trackers in step with the scan.
 
                             These are the persisted, authoritative positions: they
@@ -8845,6 +8846,8 @@ async def websocket_endpoint(websocket: WebSocket):
                             """
                             pan_axis.current_deg  = pan_deg
                             tilt_axis.current_deg = tilt_deg
+                            if rail_steps is not None:
+                                slider_axis.current_steps = int(rail_steps)
 
                         macro_eng = MacroEngine(
                             hardware        = hw,
