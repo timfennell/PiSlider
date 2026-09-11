@@ -10548,6 +10548,54 @@ async def bg_force(color: str = "white", kelvin: int = 5500, brightness: int = 1
                      "no phone connected, or it did not acknowledge")}
 
 
+@app.get("/api/bg_url")
+async def bg_phone_url(request: Request):
+    """The BG page URL a PHONE can actually reach.
+
+    The QR used to be built from the browser's own location.hostname, which
+    works for the laptop and fails for the phone. Reaching this app as
+    pislider.local produced a QR for pislider.local:8000 — macOS resolves .local
+    natively, Android has no mDNS resolver in the browser's DNS path, so the
+    phone could not resolve it at all and Chrome served a cached copy saying
+    "viewing offline version of this page".
+
+    This Pi also has two addresses — 10.42.0.1 on its own hotspot and a LAN
+    address on the house WiFi — and only the one matching the phone's network is
+    reachable. So pick the interface on the same subnet as whoever is asking:
+    the laptop requesting the QR and the phone scanning it are on the same
+    network, which makes the laptop's address the right hint. Falls back to any
+    non-loopback address, then to the requested Host header.
+    """
+    import socket as _socket
+    port = request.url.port or 8000
+    peer = request.client.host if request.client else ""
+    best = None
+    try:
+        # Every IPv4 we hold, paired with its /24 prefix.
+        addrs = []
+        for iface in _socket.getaddrinfo(_socket.gethostname(), None, _socket.AF_INET):
+            ip = iface[4][0]
+            if not ip.startswith("127."):
+                addrs.append(ip)
+        # A connected UDP socket reveals which local address routes to the peer.
+        if peer:
+            try:
+                sk = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+                sk.connect((peer, 9))
+                best = sk.getsockname()[0]
+                sk.close()
+            except Exception:
+                best = None
+        if not best:
+            best = addrs[0] if addrs else None
+    except Exception:
+        best = None
+    host = best or (request.url.hostname or "")
+    return {"url": f"http://{host}:{port}/bg", "host": host, "peer": peer,
+            "note": ("resolved from the requesting client's route — an address on "
+                     "the same network as the device scanning the code")}
+
+
 @app.get("/api/qr")
 async def qr_code(url: str):
     """Return a QR code PNG for the given URL."""

@@ -4279,11 +4279,21 @@ function macroSetRunning(running) {
 // ─── BG PHONE QR ────────────────────────────────────────────────────────────────
 let _bgPhoneCount = 0;
 
-function showBgPhoneQR() {
+async function showBgPhoneQR() {
     const modal = document.getElementById('bgPhoneModal');
     const canvas = document.getElementById('bgQrCanvas');
     const urlEl  = document.getElementById('bgQrUrl');
-    const url    = `http://${location.hostname}:${location.port || 8000}/bg`;
+    // Ask the Pi for an address the PHONE can reach, not the one this browser
+    // happens to be using. Reaching the app as pislider.local made the QR say
+    // pislider.local:8000 — fine on macOS, unresolvable on Android, which has
+    // no mDNS in the browser's DNS path. The Pi also has a hotspot address that
+    // only works for devices joined to it, so the server picks the interface
+    // that routes to whoever asked. location.hostname remains the fallback.
+    let url = `http://${location.hostname}:${location.port || 8000}/bg`;
+    try {
+        const r = await fetch('/api/bg_url');
+        if (r.ok) { const j = await r.json(); if (j && j.url) url = j.url; }
+    } catch (e) { /* keep the fallback */ }
     urlEl.textContent = url;
     // Fetch QR PNG from Pi and draw onto canvas
     const qrSrc = `/api/qr?url=${encodeURIComponent(url)}`;
