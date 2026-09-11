@@ -9251,7 +9251,28 @@ async def websocket_endpoint(websocket: WebSocket):
                                     )
                                     await broadcast({"type":"log",
                                         "msg": f"Flats: setting BG → {bg} …"})
-                                    await send_bg_command(bg, slot.kelvin, slot.bg_settle_ms)
+                                    # Confirm the background actually changed.
+                                    #
+                                    # send_bg_command returns False when no phone
+                                    # is connected or the ack times out. That was
+                                    # ignored, so with the phone disconnected the
+                                    # flats were captured against whatever the
+                                    # panel happened to be showing, while the log
+                                    # claimed the colour had been set. Silently
+                                    # wrong calibration frames are worse than none
+                                    # at all: MattePro solves every matte against
+                                    # them, so the error propagates into the whole
+                                    # scan instead of announcing itself.
+                                    _bg_ok = await send_bg_command(
+                                        bg, slot.kelvin, slot.bg_settle_ms)
+                                    if not _bg_ok:
+                                        await broadcast({"type":"log",
+                                            "msg": f"✗ Flats aborted — the phone did not "
+                                                   f"confirm the {bg} background. Open the BG "
+                                                   f"page on the phone, check the dot is green, "
+                                                   f"and try again. Capturing now would produce "
+                                                   f"calibration frames of the wrong colour."})
+                                        break
                                     await broadcast({"type":"log",
                                         "msg": f"Flats: capturing {stem} …"})
                                     path = await macro_capture(save_path, stem, slot)

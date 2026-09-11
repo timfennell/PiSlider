@@ -3245,7 +3245,33 @@ class MacroEngine:
                     # Optional: command OLED phone background before capture.
                     # Slot bg_color="" means no change (normal lighting).
                     if slot.bg_color and self._bg is not None:
-                        await self._bg(slot.bg_color, slot.kelvin, slot.bg_settle_ms)
+                        # The scan ignored this result too. A phone that has
+                        # dropped off — screen asleep, tab backgrounded, network
+                        # switched — stops changing the background, and every
+                        # matte from then on is solved against whatever the panel
+                        # is actually showing. That is the failure that turned a
+                        # background orange mid-scan and was only caught by eye.
+                        # Three in a row is not a blip; stop and say so.
+                        _bg_ok = await self._bg(slot.bg_color, slot.kelvin,
+                                                slot.bg_settle_ms)
+                        if _bg_ok is False:
+                            self._bg_fail = getattr(self, "_bg_fail", 0) + 1
+                            logger.warning(
+                                f"Background not confirmed for slot {slot.id} "
+                                f"({self._bg_fail} in a row)")
+                            if self._bg_fail >= 3:
+                                msg = (f"✗ The phone has not confirmed the background for "
+                                       f"{self._bg_fail} captures in a row. Stopping at stack "
+                                       f"{stack_idx+1}.\nEvery matte from here would be solved "
+                                       f"against the wrong colour. Reconnect the BG page "
+                                       f"(check the dot is green), then resume from stack "
+                                       f"{stack_idx+1}.")
+                                logger.error(msg.replace("\n", " "))
+                                await self._broadcast({"type": "log", "msg": msg})
+                                self._stop_event.set()
+                                return
+                        else:
+                            self._bg_fail = 0
 
                     file_path = await self._capture(slot_dir, frame_id, slot)
 
