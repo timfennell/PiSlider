@@ -359,6 +359,29 @@ document.getElementById('br-slider').addEventListener('input', (e) => {
   }
 });
 
+// ── Recover when the page comes back ─────────────────────────────────────────
+//
+// Android freezes timers in a backgrounded tab or a locked screen, so the
+// 2-second reconnect in ws.onclose never fires while the phone is asleep — the
+// page cannot heal itself, because the timer that would heal it is suspended
+// too. Every service restart or screen sleep therefore needed a manual refresh.
+//
+// visibilitychange still fires when the page comes back, so use that as the
+// recovery point: re-acquire the wake lock (it is always dropped while hidden)
+// and reconnect immediately rather than waiting on a timer that may be frozen.
+// 'online' and 'pageshow' cover waking with the network already back.
+function recoverNow() {
+  if (document.visibilityState !== 'visible') return;
+  acquireWakeLock();
+  if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+    wsConnect();
+  }
+}
+document.addEventListener('visibilitychange', recoverNow);
+window.addEventListener('pageshow', recoverNow);
+window.addEventListener('online',   recoverNow);
+window.addEventListener('focus',    recoverNow);
+
 // ── Init ─────────────────────────────────────────────────────────────────────
 acquireWakeLock();
 wsConnect();
