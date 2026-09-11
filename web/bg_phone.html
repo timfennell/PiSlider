@@ -215,38 +215,19 @@ function setColor(color, kelvin, settleMs, cmdBrightness) {
   document.getElementById('ct-val').textContent = `${currentKelvin}K`;
   updateSwatch();
 
-  // Tell the rig the background is up — by OBSERVING the paint, not by
-  // guessing at a delay.
+  // Ack after a plain delay.
   //
-  // Assigning bg.style.background only marks the element dirty. The browser
-  // paints on a later frame, so a timer started here is counting from the wrong
-  // instant and has to be padded to cover render, websocket transit and panel
-  // response all at once. Two nested rAF callbacks bracket a real paint: the
-  // first runs before the next frame, the second after that frame has been
-  // committed. At that point the new colour is genuinely on screen and the only
-  // thing left to wait for is the panel itself.
+  // This replaced a paint-confirmed handshake (two nested rAF callbacks, then a
+  // short panel margin) which was correct and measurably faster — ~65 ms rather
+  // than the commanded settle. It is reverted because it was one more moving
+  // part in a page that was failing for an unrelated reason: the phone was
+  // dropping off the network roughly every 60 seconds, and no ack scheme
+  // survives the socket going away. Simple is worth more than fast here.
   //
-  // PANEL_MS covers just that — LCD pixel response, and the brightness ramp an
-  // OLED does when a large white field appears. It is deliberately not exposed
-  // as a setting: it is a property of this phone, not of the scan.
-  //
-  // The fallback matters. requestAnimationFrame STOPS when the tab is
-  // backgrounded or the screen locks, so a paint-only ack would never arrive
-  // and every background change would sit until the rig's 5 s timeout. The
-  // commanded settle becomes that fallback, and whichever fires first wins.
-  // The ack reports which path it took so the rig can tell a sleeping phone
-  // from a working one.
-  const PANEL_MS   = 30;
-  const fallbackMs = settleMs !== undefined ? settleMs : 250;
-  let acked = false;
-  const fire = (how) => {
-    if (acked) return;
-    acked = true;
-    sendReady(color, how);
-  };
-  requestAnimationFrame(() => requestAnimationFrame(
-    () => setTimeout(() => fire('paint'), PANEL_MS)));
-  setTimeout(() => fire('timeout'), fallbackMs);
+  // If the reconnection problem is ever settled and the extra ~100 ms per slot
+  // matters again, the handshake is in git history and it worked.
+  const delay = settleMs !== undefined ? settleMs : 250;
+  setTimeout(() => sendReady(color, 'timer'), delay);
 }
 
 function updateSwatch() {
