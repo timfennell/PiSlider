@@ -593,6 +593,22 @@
                         The pan Start/End you mark for the scan are the travel limits —
                         the scan cannot move outside them. Rail Start/End set the focus range.
                     </div>
+                    <!-- Axis direction. Deliberately OUTSIDE rigSoftLimitsBlock:
+                         these are direction settings, not limit calibration, and a
+                         macro scan needs them as much as any other mode. They used
+                         to live inside the limits block, so hiding that block in
+                         macro mode took them with it. -->
+                    <div style="display:flex; gap:14px; flex-wrap:wrap; margin:2px 0 10px 0;">
+                        <label class="toggle-label" style="font-size:0.65rem; color:var(--text-muted);">
+                            <input type="checkbox" id="side_slider_inv" onchange="sendInversion('slider')"> Invert Slider
+                        </label>
+                        <label class="toggle-label" style="font-size:0.65rem; color:var(--text-muted);">
+                            <input type="checkbox" id="side_pan_inv" onchange="sendInversion('pan')"> Invert Pan
+                        </label>
+                        <label class="toggle-label" style="font-size:0.65rem; color:var(--text-muted);">
+                            <input type="checkbox" id="side_tilt_inv" onchange="sendInversion('tilt')"> Invert Tilt
+                        </label>
+                    </div>
                     <div id="rigSoftLimitsBlock">
                     <div style="font-size:0.68rem; color:var(--text-muted); margin-bottom:6px;">
                         <b style="color:var(--text-dim);">Step 2 — Soft Limits</b>
@@ -616,9 +632,6 @@
                             <button class="mode-btn" onclick="calibrateLimit('slider','max')"
                                 style="flex:1; font-size:0.65rem;">MAX →</button>
                         </div>
-                        <label class="toggle-label" style="font-size:0.65rem; color:var(--text-muted); margin-bottom:8px;">
-                            <input type="checkbox" id="side_slider_inv" onchange="sendInversion('slider')"> Invert Slider
-                        </label>
                     </div>
 
                     <!-- Pan limits -->
@@ -637,9 +650,6 @@
                             <button class="mode-btn" onclick="calibrateLimit('pan','max')"
                                 style="flex:1; font-size:0.65rem;">MAX →</button>
                         </div>
-                        <label class="toggle-label" style="font-size:0.65rem; color:var(--text-muted); margin-bottom:8px;">
-                            <input type="checkbox" id="side_pan_inv" onchange="sendInversion('pan')"> Invert Pan
-                        </label>
                     </div>
 
                     <!-- Tilt limits -->
@@ -658,9 +668,6 @@
                             <button class="mode-btn" onclick="calibrateLimit('tilt','max')"
                                 style="flex:1; font-size:0.65rem;">MAX →</button>
                         </div>
-                        <label class="toggle-label" style="font-size:0.65rem; color:var(--text-muted); margin-bottom:8px;">
-                            <input type="checkbox" id="side_tilt_inv" onchange="sendInversion('tilt')"> Invert Tilt
-                        </label>
                     </div>
                 </div>
 
