@@ -10593,6 +10593,46 @@ async def macro_project_info(path: str):
             "resumable": unfinished[0] if unfinished else None}
 
 
+_bg_pong_event: Optional[asyncio.Event] = None
+
+
+@app.get("/api/bg_ping")
+async def bg_ping():
+    """Is the phone's PAGE alive, not merely connected?
+
+    The two are different, and the difference has cost several runs today. A
+    phone whose screen slept or whose tab was backgrounded keeps its websocket
+    open at the OS level while its JavaScript is frozen, so the server sees a
+    connected client that cannot answer — and the page's own indicator dot stays
+    green, because the dot is set in ws.onopen and only cleared in ws.onclose,
+    neither of which fires while frozen.
+
+    This asks the page to prove it is running. The phone already answers bg_ping
+    with bg_pong; nothing ever sent the ping.
+    """
+    global _bg_pong_event
+    if not _bg_clients:
+        return {"alive": False, "reason": "no phone connected at all"}
+    _bg_pong_event = asyncio.Event()
+    dead = set()
+    for ws in list(_bg_clients):
+        try:
+            await ws.send_json({"type": "bg_ping"})
+        except Exception:
+            dead.add(ws)
+    _bg_clients.difference_update(dead)
+    try:
+        await asyncio.wait_for(_bg_pong_event.wait(), timeout=3.0)
+        return {"alive": True, "clients": len(_bg_clients),
+                "note": "page answered — its JavaScript is running"}
+    except asyncio.TimeoutError:
+        return {"alive": False, "clients": len(_bg_clients),
+                "reason": ("socket is open but the page did not answer in 3s — "
+                           "its JavaScript is frozen. The tab is backgrounded, "
+                           "the screen slept, or the browser was suspended. A "
+                           "green dot does not rule this out.")}
+
+
 @app.get("/api/bg_force")
 async def bg_force(color: str = "white", kelvin: int = 5500, brightness: int = 100):
     """Force the background phone to a known colour and temperature.
@@ -10739,7 +10779,8 @@ async def ws_bg_endpoint(websocket: WebSocket):
             elif msg_type == "bg_hello":
                 logger.info(f"BG phone says hello: {data.get('ua','')[:60]}")
             elif msg_type == "bg_pong":
-                pass
+                if _bg_pong_event is not None:
+                    _bg_pong_event.set()
     except Exception:
         pass
     finally:
