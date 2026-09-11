@@ -2500,9 +2500,13 @@ function populateShutterSelect(id, defaultVal) {
 
 document.addEventListener('DOMContentLoaded', () => {
     _recallSonyCredentials();   // restore last-used camera SSID/password
-    populateShutterSelect('macro_slot_a_shutter', 0.008);   // 1/125
-    populateShutterSelect('macro_slot_b_shutter', 0.033);   // 1/30
-    populateShutterSelect('macro_slot_c_shutter', 0.008);   // 1/125
+    // 1/15 for all three — the matting exposure this rig actually uses.
+    // data-default on the <select> in index.html is NOT read by anything; these
+    // calls are the only thing that sets the initial shutter, which is why
+    // editing that attribute had no effect.
+    populateShutterSelect('macro_slot_a_shutter', 1/15);
+    populateShutterSelect('macro_slot_b_shutter', 1/15);
+    populateShutterSelect('macro_slot_c_shutter', 1/15);
 
     const bearingSelect = document.getElementById('calib_bearing');
     if (bearingSelect) {
