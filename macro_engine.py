@@ -2839,12 +2839,36 @@ class MacroEngine:
                 _orb    = orbit_positions(session)   # [(pan, tilt), ...]
                 angles  = [p[0] for p in _orb]
                 aux_pos = [p[1] for p in _orb]
-            # Log first 20 planned positions so we can verify the path order
-            logger.info(f"📍 Planned orbit positions ({len(_orb)} stacks):")
-            for _i, (_p, _t) in enumerate(_orb[:20]):
+            # Log first 20 planned positions so we can verify the path order.
+            #
+            # Uses angles/aux_pos, which BOTH branches above set. This read _orb,
+            # which only the fresh-scan branch binds — so every resume raised
+            # "cannot access local variable '_orb'" and the scan never started.
+            logger.info(f"📍 Planned orbit positions ({len(angles)} stacks):")
+            for _i, (_p, _t) in enumerate(zip(angles[:20], aux_pos[:20])):
                 logger.info(f"   [{_i+1:3d}] pan={_p:+8.2f}°  tilt={_t:+8.2f}°")
-            if len(_orb) > 20:
-                logger.info(f"   ... ({len(_orb)-20} more)")
+            if len(angles) > 20:
+                logger.info(f"   ... ({len(angles)-20} more)")
+
+            # A replayed path is only valid in the coordinate system it was
+            # recorded in. Re-zeroing the pan axis moves every angle, so an old
+            # recording would drive the arm to positions that no longer mean
+            # what they did — and can sit outside the newly marked range
+            # entirely. Refuse rather than move to them.
+            if _preset and angles:
+                _pl = min(session.rotation_start_deg, session.rotation_end_deg)
+                _ph = max(session.rotation_start_deg, session.rotation_end_deg)
+                _out = [a for a in angles if a < _pl - 1e-6 or a > _ph + 1e-6]
+                if _out:
+                    msg = (f"✗ Recorded path does not fit the current pan range "
+                           f"[{_pl:.1f}°, {_ph:.1f}°]: {len(_out)} of {len(angles)} "
+                           f"stored positions fall outside it (e.g. {_out[0]:+.1f}°).\n"
+                           f"This happens after re-zeroing the pan axis — the stored "
+                           f"angles refer to the old zero. Start a fresh project, or "
+                           f"clear the resume preset to plan a new path.")
+                    logger.error(msg.replace("\n", " "))
+                    await self._broadcast({"type": "log", "msg": msg})
+                    raise RuntimeError("recorded path outside current pan range")
 
         # Pre‑compute all keyframes for this session (useful for UI or debugging)
         self._scan_keyframes = generate_scan_keyframes(session)
