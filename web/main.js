@@ -1743,7 +1743,19 @@ function sendCmd(command, value = null) {
             ? { command, ...value }
             : { command, value };
         socket.send(JSON.stringify(payload));
+        return true;
     }
+    // Say so, rather than dropping it.
+    //
+    // This used to fail silently: with the socket closed, every button in the
+    // app did nothing at all — no error, no log, no visible change. The server
+    // restarting is enough to cause it, and the page gives no sign. Reported as
+    // "the capture flats button is unresponsive", which is exactly what it looks
+    // like from the outside.
+    const states = ['connecting', 'open', 'closing', 'closed'];
+    const st = socket ? (states[socket.readyState] || socket.readyState) : 'no socket';
+    log(`⚠ Not sent (${command}) — connection to the rig is ${st}. Reload the page.`);
+    return false;
 }
 
 // ─── INCOMING DATA ROUTER ────────────────────────────────────────────────────
