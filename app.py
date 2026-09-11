@@ -1745,6 +1745,33 @@ def _gp_run(args, _bus_wait: float = 90.0, _bus_why: str = "", **kw):
         _CAMERA_LOCK.release()
 
 
+# Stop retrying live view once it has clearly failed.
+#
+# The worker used to retry forever. Every attempt holds the camera bus for its
+# full 8 s timeout, so on a body that cannot serve PTP preview — the A7 III is
+# one; --capture-preview returns PTP Timeout with the camera idle and 40 s to
+# answer — the loop owns the camera roughly 8 seconds in every 8.5, and nothing
+# else can get it. Observed as a Capture Flats press where "nothing happened":
+# the request was queued behind an endless run of doomed previews.
+#
+# A camera that CAN serve preview resets the counter on every success, so this
+# only ever fires on sustained failure.
+_LIVEVIEW_GIVE_UP = 10
+
+
+def _liveview_give_up(fails: int) -> None:
+    global _sony_liveview_running
+    _sony_liveview_running = False
+    msg = (f"Live view stopped after {fails} consecutive failures — this camera is "
+           f"not answering preview requests. It was holding the camera for 8s at a "
+           f"time, which blocks captures and flats. Use TAKE PREVIEW SHOT to frame.")
+    logger.warning(msg)
+    try:
+        state["_pending_liveview_notice"] = msg
+    except Exception:
+        pass
+
+
 def stop_sony_liveview() -> bool:
     """Signal the Sony liveview worker to exit. True if it was running.
 
@@ -2270,11 +2297,17 @@ def _sony_usb_liveview_worker():
                         )
                     except Exception:
                         pass
+                if _fail_count >= _LIVEVIEW_GIVE_UP:
+                    _liveview_give_up(_fail_count)
+                    break
                 _t.sleep(0.5)
 
         except subprocess.TimeoutExpired:
             _fail_count += 1
             logger.warning(f"Sony USB preview: gphoto2 timed out (8s) fails={_fail_count}")
+            if _fail_count >= _LIVEVIEW_GIVE_UP:
+                _liveview_give_up(_fail_count)
+                break
             _t.sleep(0.5)
         except Exception as e:
             _fail_count += 1
@@ -9216,6 +9249,13 @@ async def websocket_endpoint(websocket: WebSocket):
                         await websocket.send_json({"type":"log",
                             "msg":"⛔ Flats refused — save path not set."})
                     else:
+                        # Live view competes for the one camera, and a failing
+                        # one holds the bus 8 s at a time. Flats are a handful of
+                        # captures — they should not queue behind it.
+                        if stop_sony_liveview():
+                            await websocket.send_json({"type":"log",
+                                "msg":"Live view stopped — flats need the camera."})
+                            await asyncio.sleep(1.2)
                         slots_raw = msg.get("slots", [])
                         state["is_running"] = True
                         await broadcast({"type": "run_state", "running": True})
