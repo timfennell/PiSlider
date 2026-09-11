@@ -9256,12 +9256,17 @@ async def websocket_endpoint(websocket: WebSocket):
                             await websocket.send_json({"type":"log",
                                 "msg":"Live view stopped — flats need the camera."})
                             await asyncio.sleep(1.2)
-                        _flats_aborted = False
                         slots_raw = msg.get("slots", [])
                         state["is_running"] = True
                         await broadcast({"type": "run_state", "running": True})
 
                         async def _run_flats():
+                            # Local to THIS function: _run_flats assigns to it below, which makes
+                            # the name local here regardless of any outer binding. Initialising it
+                            # in the enclosing scope left it unbound on the success path — the
+                            # abort never runs, so the only assignment never executes, and the
+                            # read at the end raised. Same mistake as _orb in macro_engine.
+                            _flats_aborted = False
                             try:
                                 from macro_engine import ExposureSlot
                                 # Map bg_color → cal file stem MattePro recognises
