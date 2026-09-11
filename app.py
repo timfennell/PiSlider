@@ -9256,6 +9256,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             await websocket.send_json({"type":"log",
                                 "msg":"Live view stopped — flats need the camera."})
                             await asyncio.sleep(1.2)
+                        _flats_aborted = False
                         slots_raw = msg.get("slots", [])
                         state["is_running"] = True
                         await broadcast({"type": "run_state", "running": True})
@@ -9312,6 +9313,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                                    f"page on the phone, check the dot is green, "
                                                    f"and try again. Capturing now would produce "
                                                    f"calibration frames of the wrong colour."})
+                                        _flats_aborted = True
                                         break
                                     await broadcast({"type":"log",
                                         "msg": f"Flats: capturing {stem} …"})
@@ -9323,7 +9325,9 @@ async def websocket_endpoint(websocket: WebSocket):
                                         await broadcast({"type":"log",
                                             "msg": f"  ✗ {stem} capture failed"})
                                 await broadcast({"type":"log",
-                                    "msg": "Flats capture complete."})
+                                    "msg": ("Flats capture complete." if not _flats_aborted
+                                            else "Flats stopped — nothing was captured. "
+                                                 "Reconnect the BG page and run it again.")})
                                 await broadcast({"type": "flats_done"})
                             except Exception as e:
                                 logger.error(f"capture_flats error: {e}", exc_info=True)
