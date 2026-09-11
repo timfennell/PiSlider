@@ -3742,10 +3742,28 @@ function macroCalc() {
             else if (spacing > 12) { colour = '#ffd24a'; note = ' — thin 3-view tracks'; }
             else                   { note = ' — good'; }
             sd.style.color = colour;
+            // A pan range that crosses ±90° doubles back on itself.
+            //
+            // Latitude is sin(pan), which is not monotonic: sweeping through a
+            // pole runs the latitudes up to it and then back down the same ones.
+            // The coverage figure below is already correct, but on its own it
+            // just looks like a disappointing number — it does not say that half
+            // the travel is being spent reshooting the same band. Observed:
+            // pan -144.1°..-42.5°, 101.6° of travel, 21% of the sphere.
+            const crossesLo = (panLo < -90 && panHi > -90);
+            const crossesHi = (panLo <  90 && panHi >  90);
+            let poleWarn = '';
+            if (crossesLo || crossesHi) {
+                const pole = crossesLo ? '-90°' : '+90°';
+                poleWarn = `<br><span style="font-size:0.7rem;color:#ffb020">` +
+                    `⚠ range crosses the ${pole} pole — latitude is sin(pan), so the ` +
+                    `sweep doubles back and reshoots the same band. Move the range ` +
+                    `off the pole to cover more sphere for the same travel.</span>`;
+            }
             sd.innerHTML = `${spacing.toFixed(1)}°${note}<br>` +
                 `<span style="font-size:0.7rem;color:var(--text-dim)">` +
                 `covers ${(coverageFraction * 100).toFixed(0)}% of sphere · ` +
-                `${recommendedStacks} for 12°</span>`;
+                `${recommendedStacks} for 12°</span>` + poleWarn;
         } else {
             sd.innerHTML = '—';
         }
