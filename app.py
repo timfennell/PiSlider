@@ -1787,6 +1787,32 @@ def stop_sony_liveview() -> bool:
     return was
 
 
+def stop_macro_engine(reason: str = "") -> bool:
+    """Signal the macro capture loop to stop. True if an engine was signalled.
+
+    The macro engine owns a private asyncio.Event, which is NOT the same object
+    as state["stop_event"] — that one only the timelapse worker watches. The
+    generic Stop button set the timelapse event and called emergency_stop(), so
+    motion was cut but the macro loop never learned anything had happened and
+    kept firing the shutter. Measured on a real run: Stop pressed at 11:55:28,
+    still capturing frame 31 at 11:59:22, nine frames and four minutes later,
+    against a camera that had stopped answering and wrote zero files the whole
+    time. Every stop path goes through here now so they cannot drift apart
+    again.
+    """
+    eng = _macro_eng
+    if eng is None:
+        return False
+    try:
+        eng.stop()
+    except Exception as e:
+        logger.warning(f"macro engine stop signal failed: {e}")
+        return False
+    logger.info("🛑 Macro engine stop signalled"
+                f"{f' ({reason})' if reason else ''}")
+    return True
+
+
 def camera_bus_owner() -> Optional[str]:
     """Whoever currently holds the camera, or None. For diagnostics."""
     return _CAMERA_BUS_OWNER
@@ -8181,6 +8207,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 # does not use.
                 hw.emergency_stop()
                 state["stop_event"].set()
+                # A macro scan does not watch state["stop_event"] — it has its
+                # own. Without this the generic Stop cut motion while the
+                # capture loop marched on through a dead camera.
+                stop_macro_engine("generic stop")
                 hw.stop_all_axes()
                 state["is_running"] = False
                 _cinematic_live_active = False   # clear live gate so L1/R1 works after stop
@@ -9363,19 +9393,20 @@ async def websocket_endpoint(websocket: WebSocket):
                 # This used to be gated on _macro_task being alive, so a stop
                 # pressed while the task was wedged did nothing at all.
                 hw.emergency_stop()
-                if _macro_eng is not None:
-                    try:
-                        _macro_eng.stop()
-                    except Exception as e:
-                        logger.warning(f"macro engine stop signal failed: {e}")
-                if _macro_task and not _macro_task.done():
-                    # Signal the engine — it will clean up and broadcast macro_done
-                    state["stop_event"].set()
-                    # Also flag via state for the worker loop
-                    state["is_running"] = False
-                    hw.stop_all_axes()
-                    await broadcast({"type": "run_state", "running": False})
-                    await broadcast({"type": "log", "msg": "Macro sequence stopped."})
+                _signalled = stop_macro_engine("macro stop")
+                # None of this is gated on _macro_task being alive any more.
+                # It used to be, so a stop pressed while the task handle was
+                # stale did no bookkeeping and said nothing — the UI showed a
+                # run that was still going, with no way to tell whether the
+                # press had registered at all.
+                state["stop_event"].set()
+                state["is_running"] = False
+                hw.stop_all_axes()
+                await broadcast({"type": "run_state", "running": False})
+                await broadcast({"type": "log", "msg":
+                    "Macro sequence stopped — the loop finishes the frame in "
+                    "flight, then halts." if _signalled else
+                    "Macro sequence stopped (no capture loop was running)."})
 
             elif cmd == "macro_save_lens_profile":
                 state["macro_lens_profile"] = msg.get("profile", {})

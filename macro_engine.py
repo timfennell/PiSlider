@@ -2622,6 +2622,8 @@ class MacroEngine:
 
     async def _wait_if_paused(self):
         """Block here while paused. Returns False if we were stopped instead."""
+        if self._stop_event.is_set():
+            return False
         if self._pause_event.is_set():
             return True
         logger.info("⏸ Paused — holding position")
@@ -2630,6 +2632,14 @@ class MacroEngine:
             if self._stop_event.is_set():
                 return False
             await asyncio.sleep(0.2)
+        # Falling out of that loop is NOT proof we were resumed: stop() sets
+        # _pause_event as well, deliberately, so a parked run is released. The
+        # while-condition then goes false and the stop check inside the body
+        # never runs, so this reported "carry on" to a stopped scan — and set
+        # _redo_stack on the way out, which sent the rail back to the start of
+        # the stack at fast speed before the loop finally noticed and halted.
+        if self._stop_event.is_set():
+            return False
         logger.info("▶ Resuming")
         await self._broadcast({"type": "log", "msg": "▶ Resumed."})
         if self.redo_stack_on_resume:
@@ -3273,6 +3283,15 @@ class MacroEngine:
                         else:
                             self._bg_fail = 0
 
+                    # Re-check immediately before the shutter. Everything above
+                    # this line can block for a long time — the drain waits out
+                    # a download (45s when the camera has stopped answering),
+                    # the settings call another 10s — and a stop pressed during
+                    # that wait would otherwise still fire this frame, and the
+                    # next, one whole slot behind the operator the entire time.
+                    if self._stop_event.is_set():
+                        break
+
                     file_path = await self._capture(slot_dir, frame_id, slot)
 
                     # Stop early when the camera has stopped answering.
@@ -3599,6 +3618,12 @@ class MacroEngine:
 
                     if slot.bg_color and self._bg is not None:
                         await self._bg(slot.bg_color, slot.kelvin, slot.bg_settle_ms)
+
+                    # See the primary loop: the drain and settings calls above
+                    # can block for the best part of a minute, so a stop has to
+                    # be re-checked here or this frame fires regardless.
+                    if self._stop_event.is_set():
+                        break
 
                     _gfp = await self._capture(slot_dir, frame_id, slot)
 
