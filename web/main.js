@@ -3720,7 +3720,11 @@ function macroCalc() {
     const sins = [Math.sin(panLo * Math.PI / 180), Math.sin(panHi * Math.PI / 180)];
     if (panLo <= -90 && -90 <= panHi) sins.push(-1);
     if (panLo <=  90 &&  90 <= panHi) sins.push(1);
-    const uSpan = Math.max(0, Math.max(...sins) - Math.min(...sins));
+    // A tilted pan axis only reaches latitudes |v_x| <= sin(axis tilt), so the
+    // band shrinks with it (mirrors reach_band() in macro_engine.py).
+    const axisTiltDeg = parseFloat(document.getElementById('macro_rot_axis_angle')?.value || 90);
+    const uSpan = Math.max(0, Math.max(...sins) - Math.min(...sins))
+                  * Math.abs(Math.sin(axisTiltDeg * Math.PI / 180));
     // Tilt arc actually swept (mirrors tilt_arc_rad() in macro_engine.py). A
     // limited tilt range zig-zags across that arc instead of winding a full
     // circle, so it needs proportionally fewer stacks for the same spacing.

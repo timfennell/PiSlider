@@ -788,23 +788,70 @@ def tilt_arc_rad(tilt_span_deg: float = 360.0) -> float:
     return 2.0 * math.pi if tilt_span_deg >= 350.0 else math.radians(max(1.0, tilt_span_deg))
 
 
+def reach_band(pan_lo_deg: float, pan_hi_deg: float, pan_axis_tilt_deg: float = 90.0):
+    """Latitude band (u = v_x) a pan range reaches with the pan axis tilted.
+
+    Tilt spins the viewpoint about x, so v_x is a viewpoint's latitude and pan
+    alone sets it: v_x = cos(alpha) sin(pan) (see motors_for_viewpoint). At a
+    90 degree pan axis that is sin(pan). Tilted any other way the band is the
+    pan band scaled by cos(alpha), and planning rows and turns as if pan were
+    latitude spaced them unevenly: at 45 degrees, 8.5 degrees between rows
+    against 12.5 along them.
+    """
+    u0, u1 = pan_band(pan_lo_deg, pan_hi_deg)
+    _, alpha = _pan_axis_vec(pan_axis_tilt_deg)
+    c = abs(math.cos(alpha))
+    return u0 * c, u1 * c
+
+
+def _pan_for_lat(lat_deg: float, pan_lo_deg: float, pan_hi_deg: float,
+                 pan_axis_tilt_deg: float = 90.0) -> float:
+    """Pan angle that puts a view at latitude lat_deg, inside the pan range if possible."""
+    _, alpha = _pan_axis_vec(pan_axis_tilt_deg)
+    ca = math.cos(alpha)
+    if abs(ca - 1.0) < 1e-12:
+        th = lat_deg                        # pan axis at 90: pan IS latitude
+    else:
+        x = math.sin(math.radians(lat_deg)) / ca
+        th = math.degrees(math.asin(max(-1.0, min(1.0, x))))
+    # sin(pan) repeats past +/-90, so a latitude has a second pan solution.
+    for cand in (th, 180.0 - th, -180.0 - th):
+        if pan_lo_deg - 1e-6 <= cand <= pan_hi_deg + 1e-6:
+            return cand
+    return th
+
+
+def _tilt_zero_deg(pan_deg: float, pan_axis_tilt_deg: float = 90.0) -> float:
+    """Azimuth about x that tilt 0 points to at this pan (motors_for_viewpoint's phi0).
+
+    Constant for a 90 degree pan axis. Otherwise it moves as pan changes, so a
+    helix that creeps pan has to add the change to tilt, or consecutive views
+    drift apart on the sphere.
+    """
+    k, _ = _pan_axis_vec(pan_axis_tilt_deg)
+    u = _R_rodrigues(k, -math.radians(pan_deg)) @ np.array([0.0, 0.0, 1.0])
+    return math.degrees(math.atan2(u[2], u[1]))
+
+
 def helix_node_count(pan_lo_deg: float, pan_hi_deg: float,
                      spacing_deg: float = TARGET_SPACING_DEG,
-                     tilt_span_deg: float = 360.0) -> int:
+                     tilt_span_deg: float = 360.0,
+                     pan_axis_tilt_deg: float = 90.0) -> int:
     """Nodes needed to sample a pan band at a given neighbour spacing.
 
     Rounds UP: rounding to nearest leaves the count fractionally over target,
     so the app's own recommendation would not meet the app's own threshold.
     """
-    u0, u1 = pan_band(pan_lo_deg, pan_hi_deg)
+    u0, u1 = reach_band(pan_lo_deg, pan_hi_deg, pan_axis_tilt_deg)
     s = math.radians(max(0.1, spacing_deg))
     return max(1, int(math.ceil(tilt_arc_rad(tilt_span_deg) * (u1 - u0) / (s * s))))
 
 
 def helix_spacing_deg(pan_lo_deg: float, pan_hi_deg: float, n: int,
-                      tilt_span_deg: float = 360.0) -> float:
+                      tilt_span_deg: float = 360.0,
+                      pan_axis_tilt_deg: float = 90.0) -> float:
     """The inverse: neighbour spacing that n nodes will actually achieve."""
-    u0, u1 = pan_band(pan_lo_deg, pan_hi_deg)
+    u0, u1 = reach_band(pan_lo_deg, pan_hi_deg, pan_axis_tilt_deg)
     h = (u1 - u0) / max(1, int(n))
     return math.degrees(math.sqrt(tilt_arc_rad(tilt_span_deg) * max(h, 0.0)))
 
@@ -823,35 +870,30 @@ def _tilt_raster(n: int, lat_lo: float, lat_hi: float,
     Rows start half a spacing in from each pan limit, and views half a spacing
     in from each tilt limit, so nothing lands outside the range. A row at pan p
     lies on a circle of radius cos(p), so it gets proportionally fewer views
-    for the same spacing. The spacing is tuned for n views, then single views
-    are added to or removed from the rows that rounded furthest, so the plan has
-    exactly n.
+    for the same spacing. The row count is the one where the gap between rows
+    best matches the spacing along them at exactly n views; single views are
+    then added to or removed from the rows that rounded furthest, so the plan
+    has exactly n.
     """
     t_lo = tilt_center_deg - tilt_span_deg / 2.0
     arc = math.radians(max(1.0, tilt_span_deg))
 
-    def row_plan(sp):
-        rows = max(1, int(round((lat_hi - lat_lo) / math.degrees(sp))))
-        pitch = (lat_hi - lat_lo) / rows
+    # Pick the number of rows. For R rows the pitch between them is fixed, and
+    # fitting exactly n views into their combined length fixes the spacing along
+    # them; take the R where the two agree best. Choosing the spacing first and
+    # rounding the row count left 9.3 degrees along rows against 11.1 between
+    # them for 83 stacks at a 45 degree pan axis.
+    band_deg = lat_hi - lat_lo
+    best, best_score = None, None
+    for rows in range(1, max(1, min(n, int(band_deg / 0.25) + 1)) + 1):
+        pitch = band_deg / rows
         pans = [lat_lo + (i + 0.5) * pitch for i in range(rows)]
-        ideal = [arc * max(1e-3, math.cos(math.radians(p))) / sp for p in pans]
-        return pans, ideal, [max(1, int(round(x))) for x in ideal]
-
-    band = math.sin(math.radians(lat_hi)) - math.sin(math.radians(lat_lo))
-    sp = math.sqrt(arc * max(band, 1e-9) / max(1, n))
-    best = row_plan(sp)
-    lo_s, hi_s = sp * 0.5, sp * 2.0
-    for _ in range(40):
-        if sum(best[2]) == n:
-            break
-        mid = (lo_s + hi_s) / 2.0
-        cand = row_plan(mid)
-        if abs(sum(cand[2]) - n) < abs(sum(best[2]) - n):
-            best = cand
-        if sum(cand[2]) > n:
-            lo_s = mid
-        else:
-            hi_s = mid
+        length = sum(arc * max(1e-3, math.cos(math.radians(p))) for p in pans)
+        along = math.degrees(length / n)
+        score = abs(along - pitch) / max(pitch, 1e-9)
+        if best_score is None or score < best_score:
+            ideal = [arc * max(1e-3, math.cos(math.radians(p))) / math.radians(along) for p in pans]
+            best, best_score = (pans, ideal, [max(1, int(round(x))) for x in ideal]), score
 
     # Whole views per row rarely add up to n exactly. Give or take one view on
     # the rows whose rounding was furthest off, so the scan runs the number of
@@ -880,7 +922,7 @@ def _tilt_raster(n: int, lat_lo: float, lat_hi: float,
 
 def helix_nodes(n: int, pan_lo_deg: float, pan_hi_deg: float,
                 double: bool = False, tilt_span_deg: float = 360.0,
-                tilt_center_deg: float = 0.0):
+                tilt_center_deg: float = 0.0, pan_axis_tilt_deg: float = 90.0):
     """(pan_deg, tilt_deg) along an evenly-spaced helix across the pan band.
 
     A single pass is the default because it measures better on every count that
@@ -904,9 +946,15 @@ def helix_nodes(n: int, pan_lo_deg: float, pan_hi_deg: float,
     tilt_center_deg +/- half the span. Centring a zig-zag on 0 swept -60..+60
     for a 0..+120 range, so the planner dropped every node below 0 and never
     reached +60..+120. `double` only applies to the wound helix.
+
+    Rows and turns are laid out on the sphere in latitude (asin v_x) and then
+    converted to pan for the rig's pan axis tilt, so the spacing holds at any
+    axis angle, not only at 90 degrees. See reach_band().
     """
     n = max(1, int(n))
-    u0, u1 = pan_band(pan_lo_deg, pan_hi_deg)
+    u0, u1 = reach_band(pan_lo_deg, pan_hi_deg, pan_axis_tilt_deg)
+    axis = pan_axis_tilt_deg
+    to_pan = lambda lat: _pan_for_lat(lat, pan_lo_deg, pan_hi_deg, axis)
     # asin() puts every node in [-90, 90], which costs no coverage: pan past a
     # pole only repeats latitudes. See pan_band().
     lo, hi = math.degrees(math.asin(u0)), math.degrees(math.asin(u1))
@@ -914,12 +962,13 @@ def helix_nodes(n: int, pan_lo_deg: float, pan_hi_deg: float,
     half_span = max(1.0, tilt_span_deg) / 2.0
     if u1 - u0 < 1e-9:
         if wrap:
-            return [(lo, (i * 360.0 / n) - 180.0) for i in range(n)]
-        return [(lo, tilt_center_deg - half_span + (i + 0.5) * 2.0 * half_span / n)
+            return [(to_pan(lo), (i * 360.0 / n) - 180.0) for i in range(n)]
+        return [(to_pan(lo), tilt_center_deg - half_span + (i + 0.5) * 2.0 * half_span / n)
                 for i in range(n)]
 
     if not wrap:
-        return _tilt_raster(n, lo, hi, tilt_span_deg, tilt_center_deg)
+        return [(to_pan(lat), t) for lat, t in
+                _tilt_raster(n, lo, hi, tilt_span_deg, tilt_center_deg)]
 
     h = (u1 - u0) / n                      # z-step per node, BOTH passes
     s = math.sqrt(2.0 * math.pi * h)       # resulting isotropic spacing, rad
@@ -949,7 +998,16 @@ def helix_nodes(n: int, pan_lo_deg: float, pan_hi_deg: float,
     else:
         pts, _ = pass_nodes(n, (u1 - u0) / n, u0, 0.0, False)
 
-    return [(pan, ((phi + 180.0) % 360.0) - 180.0) for pan, phi in pts]
+    if abs(math.cos(_pan_axis_vec(axis)[1]) - 1.0) < 1e-12:
+        return [(to_pan(pan), ((phi + 180.0) % 360.0) - 180.0) for pan, phi in pts]
+    out, zero0 = [], None
+    for lat, phi in pts:
+        pan = to_pan(lat)
+        z = _tilt_zero_deg(pan, axis)
+        if zero0 is None:
+            zero0 = z
+        out.append((pan, ((phi + z - zero0 + 180.0) % 360.0) - 180.0))
+    return out
 
 
 def plan_helix_nodes(session: MacroSession) -> List[Dict[str, Any]]:
@@ -974,7 +1032,8 @@ def plan_helix_nodes(session: MacroSession) -> List[Dict[str, Any]]:
 
     out: List[Dict[str, Any]] = []
     for pan, tilt in helix_nodes(n_req, pan_lo, pan_hi, double, tilt_span,
-                                 tilt_center_deg=(t_lo + t_hi) / 2.0):
+                                 tilt_center_deg=(t_lo + t_hi) / 2.0,
+                                 pan_axis_tilt_deg=axis):
         if pan < pan_lo - 1e-6 or pan > pan_hi + 1e-6:
             continue
         if tilt_span < 350.0 and not (t_lo - 1e-6 <= tilt <= t_hi + 1e-6):
@@ -2864,9 +2923,11 @@ class MacroEngine:
             tspan = abs(session.aux_end_deg - session.aux_start_deg)
             spacing = helix_spacing_deg(session.rotation_start_deg,
                                         session.rotation_end_deg,
-                                        session.num_stacks, tilt_span_deg=tspan)
+                                        session.num_stacks, tilt_span_deg=tspan,
+                                        pan_axis_tilt_deg=session.pan_axis_tilt_deg)
             want = helix_node_count(session.rotation_start_deg,
-                                    session.rotation_end_deg, tilt_span_deg=tspan)
+                                    session.rotation_end_deg, tilt_span_deg=tspan,
+                                    pan_axis_tilt_deg=session.pan_axis_tilt_deg)
             logger.info(f"  Node spacing: ≈{spacing:.1f}° "
                         f"(target ≤{TARGET_SPACING_DEG:.0f}° needs {want} stacks)")
             if spacing > TARGET_SPACING_DEG:
