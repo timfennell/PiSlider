@@ -3721,8 +3721,18 @@ function macroCalc() {
     if (panLo <= -90 && -90 <= panHi) sins.push(-1);
     if (panLo <=  90 &&  90 <= panHi) sins.push(1);
     const uSpan = Math.max(0, Math.max(...sins) - Math.min(...sins));
-    const bandArea = 2 * Math.PI * uSpan;                 // steradians
-    const coverageFraction = uSpan / 2;                   // of the whole sphere
+    // Tilt arc actually swept (mirrors tilt_arc_rad() in macro_engine.py). A
+    // limited tilt range zig-zags across that arc instead of winding a full
+    // circle, so it needs proportionally fewer stacks for the same spacing.
+    let tiltSpanDeg = 360;
+    if (_macroTiltMode === 'limited') {
+        const tA = _macroTiltStart ?? parseFloat(document.getElementById('macro_tilt_soft_min')?.value ?? -90);
+        const tB = _macroTiltEnd ?? parseFloat(document.getElementById('macro_tilt_soft_max')?.value ?? 90);
+        tiltSpanDeg = Math.abs(tB - tA);
+    }
+    const tiltArc = tiltSpanDeg >= 350 ? 2 * Math.PI : Math.max(1, tiltSpanDeg) * Math.PI / 180;
+    const bandArea = tiltArc * uSpan;                     // steradians
+    const coverageFraction = (uSpan / 2) * (tiltArc / (2 * Math.PI));   // of the whole sphere
 
     // Target 12°, set by TRACK LENGTH rather than by pair matching.
     //
