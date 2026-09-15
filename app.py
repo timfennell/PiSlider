@@ -9319,6 +9319,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             # abort never runs, so the only assignment never executes, and the
                             # read at the end raised. Same mistake as _orb in macro_engine.
                             _flats_aborted = False
+                            _abort_hint = "Reconnect the BG page and run it again."
                             try:
                                 from macro_engine import ExposureSlot
                                 # Map bg_color → cal file stem MattePro recognises
@@ -9328,10 +9329,23 @@ async def websocket_endpoint(websocket: WebSocket):
                                     "grey":  "cal_grey",
                                     "":      None,
                                 }
-                                os.makedirs(flats_dir, exist_ok=True)
-                                await broadcast({"type":"log",
-                                    "msg": f"Flats → {flats_dir}"})
-                                for s in slots_raw:
+                                # Same rule as a macro scan: the save path itself must
+                                # already exist. With the drive unplugged, creating
+                                # <save path>/<project>/<orbit>/flats would build a fake
+                                # drive folder on the Pi's own disk as root. The flats
+                                # would land there, and the real drive would then mount
+                                # under a different name.
+                                if not (os.path.isdir(save_path) and os.access(save_path, os.W_OK)):
+                                    _flats_aborted = True
+                                    _abort_hint = "Mount the drive and run it again."
+                                    await broadcast({"type":"log",
+                                        "msg": f"⛔ Flats refused — save path {save_path} is not "
+                                               f"available. Is the drive mounted?"})
+                                else:
+                                    os.makedirs(flats_dir, exist_ok=True)
+                                    await broadcast({"type":"log",
+                                        "msg": f"Flats → {flats_dir}"})
+                                for s in ([] if _flats_aborted else slots_raw):
                                     if not s.get("enabled", True):
                                         continue
                                     bg = s.get("bg_color", "")
@@ -9387,7 +9401,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                 await broadcast({"type":"log",
                                     "msg": ("Flats capture complete." if not _flats_aborted
                                             else "Flats stopped — nothing was captured. "
-                                                 "Reconnect the BG page and run it again.")})
+                                                 + _abort_hint)})
                                 await broadcast({"type": "flats_done"})
                             except Exception as e:
                                 logger.error(f"capture_flats error: {e}", exc_info=True)
