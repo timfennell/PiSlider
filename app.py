@@ -3637,6 +3637,24 @@ def _save_preview(path: str):
             logger.warning(f"_save_preview: preview save failed: {e}")
 
 
+def _flats_folder(save_path: str, project_name: str, orbit_label: str) -> str:
+    """Where Capture Flats writes.
+
+    Flats describe one camera and lens setup, and the orbits of one project can
+    use different ones — a Sony orbit for the whole specimen, a Pi camera with a
+    microscope objective for detail. With a project and orbit named, the flats go
+    in that orbit's folder (<project>/<orbit>/flats/), and MattePro matches them
+    to that orbit's frames. Without both they go to the save path as before, and
+    MattePro uses those for any orbit that has no flats of its own.
+    """
+    if not (project_name and orbit_label):
+        return save_path
+    from macro_engine import MacroSession, project_folder, orbit_folder
+    sess = MacroSession(project_name=project_name, orbit_label=orbit_label,
+                        save_path=save_path)
+    return os.path.join(orbit_folder(project_folder(sess), orbit_label), "flats")
+
+
 async def macro_capture(slot_dir: str, frame_id: str, slot: "ExposureSlot") -> Optional[str]:
     """
     Capture one frame for a macro slot.
@@ -9287,6 +9305,10 @@ async def websocket_endpoint(websocket: WebSocket):
                                 "msg":"Live view stopped — flats need the camera."})
                             await asyncio.sleep(1.2)
                         slots_raw = msg.get("slots", [])
+                        flats_dir = _flats_folder(
+                            save_path,
+                            str(msg.get("project_name") or "").strip(),
+                            str(msg.get("orbit_label") or "").strip())
                         state["is_running"] = True
                         await broadcast({"type": "run_state", "running": True})
 
@@ -9306,6 +9328,9 @@ async def websocket_endpoint(websocket: WebSocket):
                                     "grey":  "cal_grey",
                                     "":      None,
                                 }
+                                os.makedirs(flats_dir, exist_ok=True)
+                                await broadcast({"type":"log",
+                                    "msg": f"Flats → {flats_dir}"})
                                 for s in slots_raw:
                                     if not s.get("enabled", True):
                                         continue
@@ -9352,7 +9377,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                         break
                                     await broadcast({"type":"log",
                                         "msg": f"Flats: capturing {stem} …"})
-                                    path = await macro_capture(save_path, stem, slot)
+                                    path = await macro_capture(flats_dir, stem, slot)
                                     if path:
                                         await broadcast({"type":"log",
                                             "msg": f"  ✓ {stem} → {os.path.basename(path)}"})

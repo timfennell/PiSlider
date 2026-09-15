@@ -4150,7 +4150,13 @@ function captureFlats() {
     }
     const colors = slots.map(s => s.bg_color).join(', ');
     log(`Capturing flats for: ${colors}`);
-    sendCmd('capture_flats', { slots });
+    // Flats belong to one camera and lens setup, so they are saved with the
+    // orbit named in the scan form; MattePro matches them to that orbit.
+    sendCmd('capture_flats', {
+        slots,
+        project_name: document.getElementById('macro_project_name')?.value || '',
+        orbit_label:  document.getElementById('macro_orbit_label')?.value || '',
+    });
 }
 
 

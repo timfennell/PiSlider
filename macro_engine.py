@@ -3973,6 +3973,15 @@ class MacroEngine:
             "use_lego_mount":     sess.use_lego_mount,
             "lego_rotation_deg":  sess.lego_rotation_deg,
             "lego_block":         sess.lego_block,
+            # The camera setup this orbit was shot with. Orbits in one project can
+            # use different cameras and lenses, so MattePro takes flats and
+            # orientation per orbit; the project-level fields only describe the
+            # most recent orbit.
+            "camera":             sess.active_camera,
+            "camera_orientation": sess.camera_orientation,
+            "lens_profile":       _serial(sess.lens),
+            "flats":              ("flats" if os.path.isdir(os.path.join(self._orb_folder, "flats"))
+                                   else None),
         }
 
         # Load existing project.json if present, update orbits list
