@@ -2062,6 +2062,7 @@ function handleIncomingData(data) {
     if (data.type === "folder_created") handleFolderCreated(data);
     if (data.type === "rail_nudged") {
         log(`Rail ${data.delta_um > 0 ? '+' : ''}${data.delta_um} µm (${data.delta_steps > 0 ? '+' : ''}${data.delta_steps} steps) → ${data.mm.toFixed(3)} mm`);
+        if (_railRepeat) _railRepeatSend();   // still held → take the next step
     }
     if (data.type === "auto_bg_wb") handleAutoBgWb(data);
     if (data.type === "auto_bg_wb_step") {
@@ -2703,6 +2704,12 @@ const RAIL_STEPS_PER_MM = 800;   // focus rail: matches STEPS_PER_MM on the rig
 // Continuous hold speeds
 const JOG_SPEED = { pan: 10.0, tilt: 8.0, slider: 40.0 };  // deg/s or mm/s
 
+// Focus-rail repeat state. Holding an end of the slider strip repeats the
+// selected Tap step rather than running the motor continuously — at 40 mm/s a
+// 300 ms press overshoots a 20 µm step by three orders of magnitude, so the
+// step selector only means anything if hold obeys it too.
+let _railRepeat = null;       // {dir, watchdog} while a hold is repeating
+
 // Timer state — kept module-level so _stopAllUiNudges can always clean up
 const _nudgeHoldGates = {};   // axis → setTimeout id (gate before hold activates)
 const _nudgeTimers    = {};   // axis → setInterval id (keepalive while holding)
@@ -2723,6 +2730,10 @@ function startUiNudge(axis, dir, btn) {
     // After HOLD_THRESHOLD_MS without release, switch to continuous movement
     _nudgeHoldGates[axis] = setTimeout(() => {
         delete _nudgeHoldGates[axis];
+        if (axis === 'slider') {
+            _railRepeatStart(dir);   // hold = repeat the Tap step, paced by the rig
+            return;
+        }
         const speed = JOG_SPEED[axis];
         sendCmd('ui_nudge_start', { axis, dir, speed });
         // Keepalive — server watchdog stops if this stops arriving
@@ -2736,22 +2747,24 @@ function stopUiNudge(axis, btn) {
     const pressTime = _nudgePressTime[axis] || 0;
     const dir       = _nudgePressDir[axis]  || 1;
     const wasHolding = !!_nudgeTimers[axis];   // setInterval active = we entered hold mode
+    const wasRepeating = (axis === 'slider') && !!_railRepeat;
 
     _cancelNudgeAxis(axis);
     if (btn) btn.classList.remove('active');
     delete _nudgePressTime[axis];
     delete _nudgePressDir[axis];
 
-    if (wasHolding) {
+    if (wasRepeating) {
+        // The hold already moved the rail one step at a time — nothing to stop
+        // and nothing more to send.
+    } else if (wasHolding) {
         // Held long enough — stop continuous movement
         sendCmd('ui_nudge_stop', { axis });
     } else if (axis === 'slider') {
         // Quick tap on the focus rail — move an exact number of motor steps.
         // The timed-pulse path cannot go below about 0.6 mm, and a tap used to be
         // 5 mm; focus stacking works in tens of microns.
-        const mm = parseFloat(document.getElementById('slider_tap_step_mm')?.value || 0.05);
-        const steps = Math.round(dir * mm * RAIL_STEPS_PER_MM);
-        if (steps) sendCmd('rail_step_nudge', { steps });
+        _railStepOnce(dir);
     } else {
         // Quick tap (released before hold threshold) — send a small fixed step
         const deg = dir * JOG_TAP[axis];
@@ -2762,11 +2775,47 @@ function stopUiNudge(axis, btn) {
 function _cancelNudgeAxis(axis) {
     if (_nudgeHoldGates[axis]) { clearTimeout(_nudgeHoldGates[axis]);  delete _nudgeHoldGates[axis]; }
     if (_nudgeTimers[axis])    { clearInterval(_nudgeTimers[axis]);     delete _nudgeTimers[axis]; }
+    if (axis === 'slider')     { _railRepeatStop(); }
+}
+
+// ── Focus rail: exact motor steps ─────────────────────────────────────────────
+function _railTapMm() {
+    const mm = parseFloat(document.getElementById('slider_tap_step_mm')?.value);
+    return Number.isFinite(mm) ? mm : 0.05;
+}
+
+// One step of the selected size. Returns false if the selection rounds to
+// nothing, which would leave a repeat spinning with nothing to do.
+function _railStepOnce(dir) {
+    const steps = Math.round(dir * _railTapMm() * RAIL_STEPS_PER_MM);
+    if (!steps) return false;
+    sendCmd('rail_step_nudge', { steps });
+    return true;
+}
+
+function _railRepeatStart(dir) {
+    _railRepeat = { dir, watchdog: null };
+    _railRepeatSend();
+}
+
+// Each step is sent only once the rig has confirmed the last one, so a long
+// hold can never queue up moves the motor is still working through.
+function _railRepeatSend() {
+    if (!_railRepeat) return;
+    if (_railRepeat.watchdog) clearTimeout(_railRepeat.watchdog);
+    if (!_railStepOnce(_railRepeat.dir)) { _railRepeatStop(); return; }
+    _railRepeat.watchdog = setTimeout(_railRepeatStop, 3000);   // no reply → stop
+}
+
+function _railRepeatStop() {
+    if (_railRepeat && _railRepeat.watchdog) clearTimeout(_railRepeat.watchdog);
+    _railRepeat = null;
 }
 
 // ── Global safety net ─────────────────────────────────────────────────────────
 // Fires on pointer release anywhere on the document, tab switch, or WS drop.
 function _stopAllUiNudges() {
+    _railRepeatStop();   // a repeating hold has no timer in the maps below
     const axes = new Set([
         ...Object.keys(_nudgeTimers),
         ...Object.keys(_nudgeHoldGates),
