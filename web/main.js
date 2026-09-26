@@ -3764,7 +3764,11 @@ function macroCalc() {
     const sd = document.getElementById('macro_spacing_disp');
     if (sd) {
         if (numStacks > 0 && uSpan > 0) {
-            const spacing = Math.sqrt(bandArea / numStacks) * 180 / Math.PI;
+            // One pan position is a ring driven by tilt: the views sit along a
+            // single circle, so the spacing is that circle divided by the stacks.
+            const spacing = uSpan > 1e-9
+                ? Math.sqrt(bandArea / numStacks) * 180 / Math.PI
+                : tiltArc * Math.cos(panLo * Math.PI / 180) / numStacks * 180 / Math.PI;
             // Thresholds are track-length boundaries, not pair-matching ones.
             let colour = 'var(--accent-teal)', note = '';
             if (spacing > 20)      { colour = '#ff5c5c'; note = ' — will not build'; }

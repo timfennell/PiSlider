@@ -844,7 +844,12 @@ def helix_node_count(pan_lo_deg: float, pan_hi_deg: float,
     """
     u0, u1 = reach_band(pan_lo_deg, pan_hi_deg, pan_axis_tilt_deg)
     s = math.radians(max(0.1, spacing_deg))
-    return max(1, int(math.ceil(tilt_arc_rad(tilt_span_deg) * (u1 - u0) / (s * s))))
+    arc = tilt_arc_rad(tilt_span_deg)
+    if u1 - u0 < 1e-9:
+        # One pan position: the scan is a ring driven by tilt, so the views sit
+        # along that one circle rather than over a band.
+        return max(1, int(math.ceil(arc * math.sqrt(max(1e-9, 1.0 - u0 * u0)) / s)))
+    return max(1, int(math.ceil(arc * (u1 - u0) / (s * s))))
 
 
 def helix_spacing_deg(pan_lo_deg: float, pan_hi_deg: float, n: int,
@@ -852,8 +857,12 @@ def helix_spacing_deg(pan_lo_deg: float, pan_hi_deg: float, n: int,
                       pan_axis_tilt_deg: float = 90.0) -> float:
     """The inverse: neighbour spacing that n nodes will actually achieve."""
     u0, u1 = reach_band(pan_lo_deg, pan_hi_deg, pan_axis_tilt_deg)
+    arc = tilt_arc_rad(tilt_span_deg)
+    if u1 - u0 < 1e-9:
+        r = math.sqrt(max(1e-9, 1.0 - u0 * u0))
+        return math.degrees(arc * r / max(1, int(n)))     # ring: one circle of views
     h = (u1 - u0) / max(1, int(n))
-    return math.degrees(math.sqrt(tilt_arc_rad(tilt_span_deg) * max(h, 0.0)))
+    return math.degrees(math.sqrt(arc * max(h, 0.0)))
 
 
 def _tilt_raster(n: int, lat_lo: float, lat_hi: float,
@@ -4033,13 +4042,17 @@ class MacroEngine:
         pan_lo = min(session.rotation_start_deg, session.rotation_end_deg)
         pan_hi = max(session.rotation_start_deg, session.rotation_end_deg)
 
-        # A degenerate range is a configuration error, not a licence to move
-        # freely. Refuse rather than run unguarded.
+        # One pan position is a legitimate scan — a ring the tilt axis drives,
+        # which is how a tiny specimen gets shot at a single pan. What must not
+        # happen is pan MOVING with no range to bound it, so the move is allowed
+        # only while it leaves pan where it is, and refused otherwise.
         if pan_hi - pan_lo < 1e-6:
-            raise RuntimeError(
-                f"Pan range is degenerate ([{pan_lo:.1f}°, {pan_hi:.1f}°]) — refusing to "
-                "move pan. Set a real rotation start and end before scanning."
-            )
+            if abs(delta_pan) > 0.05 or abs(new_pan - pan_lo) > 0.5:
+                raise RuntimeError(
+                    f"Pan range is a single position ({pan_lo:.1f}°) but the scan asked pan "
+                    f"to move {delta_pan:+.2f}° to {new_pan:.2f}° — refusing. Set a real "
+                    "rotation start and end, or keep pan fixed and let tilt drive the orbit."
+                )
 
         if new_pan < pan_lo - 0.5 or new_pan > pan_hi + 0.5:
             raise RuntimeError(
