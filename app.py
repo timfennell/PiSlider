@@ -7812,13 +7812,20 @@ async def websocket_endpoint(websocket: WebSocket):
                         })
 
                         def _measure():
-                            """Mean R,G,B of the middle of the frame, 0-255."""
-                            frame = picam.capture_array()          # RGB888 preview stream
+                            """Mean R,G,B of the middle of the frame, 0-255.
+
+                            picamera2's "RGB888" hands back pixels in BGR order, so
+                            channel 0 is blue and channel 2 is red. Reading them the
+                            other way round made a warm background look cold, and the
+                            loop drove the display further warm until it hit 2000K.
+                            """
+                            frame = picam.capture_array()          # "RGB888" = B,G,R in memory
                             h, w = frame.shape[:2]
                             y0, y1 = int(h * 0.3), int(h * 0.7)
                             x0, x1 = int(w * 0.3), int(w * 0.7)
                             patch = frame[y0:y1, x0:x1, :3].astype("float32")
-                            return [float(patch[:, :, i].mean()) for i in range(3)]
+                            b_, g_, r_ = (float(patch[:, :, i].mean()) for i in range(3))
+                            return [r_, g_, b_]
 
                         lo, hi = 2000.0, 12000.0
                         k = float(min(max(kelvin, lo), hi))
@@ -7862,9 +7869,16 @@ async def websocket_endpoint(websocket: WebSocket):
                                     slope = -1.0        # keep the step sane if the reading was noisy
                                 k_next = math.exp(math.log(k) - err / slope)
                             prev = (k, err)
-                            k = float(min(max(k_next, lo), hi))
+                            k_next = float(min(max(k_next, lo), hi))
+                            if abs(k_next - k) < 25.0:
+                                break          # the step has stopped moving; re-measuring would repeat
+                            k = k_next
                         if best is not None:
                             k_final, err, rgb = best
+                            # Leave the display on the value chosen, not the last one
+                            # tried: a run that ends mid-search otherwise leaves the
+                            # background stuck at whatever extreme it reached.
+                            await send_bg_command(bg_color, int(round(k_final)), settle)
                             r, g, b = rgb
                             green = (g / ((r + b) / 2.0) - 1.0) * 100.0 if (r + b) else 0.0
                             await websocket.send_json({
