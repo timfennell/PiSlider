@@ -2724,6 +2724,7 @@ class MacroEngine:
         # scan all describe where the arm was before this scan started.
         self._pos         = pos_fn
         self._bg_baseline = None   # R/B of the matting background, set on first capture
+        self._bg_strikes  = 0      # consecutive stacks past the drift tolerance
         # A pause is nearly always a reaction to something being wrong, so the
         # frames already shot in the current stack are suspect. On resume the
         # stack restarts from frame 1 by default; set False to continue mid-stack.
@@ -3551,6 +3552,7 @@ class MacroEngine:
             # or on the next frame's start), so an in-loop check misses the last
             # frame. Scanning the folder after drain guarantees completeness.
             stack_preview_jpgs.clear()
+            _bg_previews = {}        # bg colour -> first preview of that slot
             for slot in enabled_slots:
                 s_dir = slot_folder(
                     stack_folder(self._orb_folder, stack_idx, rot_deg,
@@ -3560,23 +3562,22 @@ class MacroEngine:
                 if os.path.isdir(s_dir):
                     for fname in sorted(os.listdir(s_dir)):
                         if fname.endswith('_preview.jpg'):
-                            stack_preview_jpgs.append(os.path.join(s_dir, fname))
+                            _p = os.path.join(s_dir, fname)
+                            stack_preview_jpgs.append(_p)
+                            _bg_previews.setdefault(slot.bg_color, _p)
 
             # ── 5c. Background colour-drift check ────────────────────────────
             # Once per stack is enough: a display filter switches on a schedule,
             # so catching it within one stack loses at most one stack, not six
             # hours. Costs a single small JPEG read.
-            if stack_preview_jpgs:
-                _msg = self._check_bg_drift(stack_preview_jpgs[0],
-                                            label=f"stack {stack_idx+1}")
+            # Measure a slot whose background is lit. A black background carries
+            # no colour, and reading it stopped a scan at stack 2 over nothing.
+            _bg_preview = _bg_previews.get("white") or _bg_previews.get("grey")
+            if _bg_preview:
+                _msg = self._check_bg_drift(_bg_preview, label=f"stack {stack_idx+1}")
                 if _msg:
-                    logger.error(f"🎨 STOPPING — {_msg}")
-                    await self._broadcast({"type": "log",
-                        "msg": f"⛔ Scan stopped — {_msg}"})
-                    await self._broadcast({"type": "log",
-                        "msg": f"   Stacks 1–{stack_idx} are good. Fix the phone, then "
-                               f"resume from stack {stack_idx} to reshoot from here."})
-                    self._stop_event.set()
+                    logger.warning(f"🎨 {_msg}")
+                    await self._broadcast({"type": "log", "msg": f"⚠ {_msg}"})
 
             # ── 6. Return rail to start at high speed ─────────────────────────
             if not self._stop_event.is_set():
@@ -3964,10 +3965,23 @@ class MacroEngine:
     # So: sample the background from each capture and stop the scan if it
     # drifts. Six unattended hours producing unusable frames is the failure
     # worth preventing.
-    BG_DRIFT_TOL = 0.15      # log2 of the R/B ratio; trips between 5000K and 4500K
+    # log2 of the R/B ratio. Wide on purpose: once a stack is running the panel
+    # and the lighting are taken as constant, so this is here to catch something
+    # gross — a night filter switching on shifts it by about 1.0 — not the
+    # frame-to-frame wobble of a view the specimen partly blocks.
+    BG_DRIFT_TOL = 0.35
+    BG_DRIFT_STRIKES = 2     # consecutive stacks past the tolerance before saying so
 
     def _bg_chroma(self, preview_path):
-        """Mean R/B of the frame corners, where the background lives."""
+        """Median R/B of the LIT BACKGROUND in a frame, or None if it cannot tell.
+
+        Corners are not dependable background: the specimen and its mount swing
+        through them as the rig turns, and on a black background they hold almost
+        no light at all — measured 0.92 then 3.23 on consecutive stacks while the
+        white panel moved 1.03 to 1.13. So take the bright part of the frame,
+        which is the panel wherever it happens to be, and use a median so a partly
+        blocked view reads like a clear one.
+        """
         try:
             import cv2
             img = cv2.imread(str(preview_path), cv2.IMREAD_COLOR)   # BGR
@@ -3975,23 +3989,19 @@ class MacroEngine:
             return None
         if img is None or img.size == 0:
             return None
-        h, w = img.shape[:2]
-        ch, cw = max(8, h // 8), max(8, w // 8)
-        corners = np.concatenate([
-            img[:ch, :cw].reshape(-1, 3), img[:ch, -cw:].reshape(-1, 3),
-            img[-ch:, :cw].reshape(-1, 3), img[-ch:, -cw:].reshape(-1, 3)])
-        # Ignore near-black pixels: an unlit corner carries no colour information
-        lum = corners.mean(axis=1)
-        corners = corners[lum > 25]
-        if corners.shape[0] < 64:
-            return None
-        b, g, r = (float(corners[:, i].mean()) for i in range(3))
+        lum = img.mean(axis=2)
+        thresh = max(40.0, float(np.percentile(lum, 95)) * 0.6)
+        mask = lum >= thresh
+        if int(mask.sum()) < int(lum.size * 0.02):
+            return None                     # too little lit background to judge
+        px = img[mask]
+        b, g, r = (float(np.median(px[:, i])) for i in range(3))
         if b < 1.0:
             return None
         return r / b
 
     def _check_bg_drift(self, preview_path, label=""):
-        """Return None if fine, or a message describing the drift."""
+        """Return None if fine, or a message describing the drift. Never stops a scan."""
         rb = self._bg_chroma(preview_path)
         if rb is None:
             return None
@@ -4000,13 +4010,18 @@ class MacroEngine:
             logger.info(f"🎨 Background reference set: R/B={rb:.3f} ({label})")
             return None
         drift = abs(math.log2(rb / self._bg_baseline)) if rb > 0 else 0.0
-        if drift > self.BG_DRIFT_TOL:
+        if drift <= self.BG_DRIFT_TOL:
+            self._bg_strikes = 0
+            return None
+        self._bg_strikes = getattr(self, "_bg_strikes", 0) + 1
+        if self._bg_strikes >= self.BG_DRIFT_STRIKES:
             warmer = rb > self._bg_baseline
-            return (f"Background colour drifted {'WARMER' if warmer else 'COOLER'}: "
+            self._bg_strikes = 0
+            return (f"Background colour has drifted {'WARMER' if warmer else 'COOLER'}: "
                     f"R/B {self._bg_baseline:.3f} -> {rb:.3f} "
-                    f"(drift {drift:.3f} > {self.BG_DRIFT_TOL}). "
-                    f"Check the phone for a night-mode / blue-light filter and any "
-                    f"scheduled display tint. Frames from here would matte wrongly.")
+                    f"(drift {drift:.3f} > {self.BG_DRIFT_TOL}, {self.BG_DRIFT_STRIKES} stacks "
+                    f"running). Check the panel for a night-mode or blue-light filter and any "
+                    f"scheduled tint. The scan continues; frames from here may matte differently.")
         return None
 
     async def _move_rotation(self, rot_deg: float, aux_deg: Optional[float],
