@@ -7075,6 +7075,54 @@ async def websocket_endpoint(websocket: WebSocket):
             # messages (stop commands, etc.) until the sleep ends, causing the
             # appearance of a "stuck" motor and making stop buttons unresponsive.
             # We use asyncio.create_task() instead so the WS loop is always free.
+            elif cmd == "rail_step_nudge":
+                # Focus-rail nudge by an exact number of motor steps.
+                #
+                # nudge_axis runs the motor for a timed pulse: 20 mm/s with a 30 ms
+                # floor, so its smallest move is 0.6 mm, and a tap was 5 mm. Focus
+                # stacking works in 32.6 µm steps, so the pad could not place the
+                # rail anywhere useful. Stepping exactly gives 1.25 µm resolution
+                # and lands on the number asked for, using the same move call a
+                # scan uses.
+                if state["is_running"]:
+                    continue
+                _steps = int(msg.get("steps", 0))
+                if _steps == 0:
+                    continue
+                _steps = max(-4000, min(4000, _steps))       # never more than 5 mm a tap
+                _target = slider_axis.current_steps + _steps
+                if slider_axis.soft_min_steps != slider_axis.soft_max_steps:
+                    _lo = min(slider_axis.soft_min_steps, slider_axis.soft_max_steps)
+                    _hi = max(slider_axis.soft_min_steps, slider_axis.soft_max_steps)
+                    if not (_lo <= _target <= _hi):
+                        await websocket.send_json({"type": "log",
+                            "msg": f"⛔ Rail nudge refused — {_target} steps "
+                                   f"(≈{_target / STEPS_PER_MM:.3f}mm) is outside the rail "
+                                   f"limits [{_lo}…{_hi}] steps."})
+                        continue
+                try:
+                    hw.enable_motors(True)
+                    # Same timing the scan's precision move uses: 0.25 s per mm,
+                    # which is about 3,200 steps/s, within what the bit-bang loop
+                    # can deliver.
+                    _dur = max(0.12, abs(_steps) / STEPS_PER_MM * 0.25)
+                    await asyncio.to_thread(hw.move_axes_simultaneous, _steps, 0, 0, _dur)
+                    slider_axis.current_steps = _target
+                    slider_axis.current_mm    = _target / STEPS_PER_MM
+                    state["macro_rail_current_steps"] = _target
+                    save_session()
+                    await websocket.send_json({"type": "status",
+                        "pos_s": round(slider_axis.current_mm, 3),
+                        "pos_p": round(pan_axis.current_deg, 2),
+                        "pos_t": round(tilt_axis.current_deg, 2)})
+                    await websocket.send_json({"type": "rail_nudged",
+                        "delta_steps": _steps,
+                        "delta_um": round(_steps / STEPS_PER_MM * 1000.0, 2),
+                        "mm": round(slider_axis.current_mm, 4)})
+                except Exception as exc:
+                    logger.error(f"rail_step_nudge: {exc}", exc_info=True)
+                    await websocket.send_json({"type": "log", "msg": f"⚠ Rail nudge failed: {exc}"})
+
             elif cmd == "nudge_axis":
                 if state["is_running"]: continue
                 axis = msg.get("axis", "pan")

@@ -1978,7 +1978,8 @@ function handleIncomingData(data) {
         if (data.total !== undefined)
             els.totFrame.innerText = data.total;
 
-        if (data.pos_s !== undefined) els.valS.innerText = data.pos_s.toFixed(1);
+        // Three decimals: focus nudges move microns, and 0.1 mm rounding hid them.
+        if (data.pos_s !== undefined) els.valS.innerText = data.pos_s.toFixed(3);
         if (data.pos_p !== undefined) {
             els.valP.innerText = data.pos_p.toFixed(1);
             calibState.pan_deg = data.pos_p;
@@ -2059,6 +2060,9 @@ function handleIncomingData(data) {
     if (data.type === "sony_record_error") handleSonyRecordError(data);
     if (data.type === "sony_usb_status") handleSonyUsbStatus(data);
     if (data.type === "folder_created") handleFolderCreated(data);
+    if (data.type === "rail_nudged") {
+        log(`Rail ${data.delta_um > 0 ? '+' : ''}${data.delta_um} µm (${data.delta_steps > 0 ? '+' : ''}${data.delta_steps} steps) → ${data.mm.toFixed(3)} mm`);
+    }
     if (data.type === "auto_bg_wb") handleAutoBgWb(data);
     if (data.type === "auto_bg_wb_step") {
         log(`  step ${data.step}: ${data.kelvin}K → R${data.r} G${data.g} B${data.b} (red/blue ${data.err_pct > 0 ? '+' : ''}${data.err_pct}%)`);
@@ -2693,7 +2697,8 @@ const HOLD_THRESHOLD_MS  = 300;   // tap faster than this → step; slower → c
 const NUDGE_KEEPALIVE_MS = 150;   // keepalive interval (must be < server 500 ms timeout)
 
 // Per-axis step sizes for tap mode
-const JOG_TAP = { pan: 1.0, tilt: 1.0, slider: 5.0 };   // degrees / mm
+const JOG_TAP = { pan: 1.0, tilt: 1.0, slider: 5.0 };   // degrees / mm (slider taps use the Tap step selector)
+const RAIL_STEPS_PER_MM = 800;   // focus rail: matches STEPS_PER_MM on the rig
 
 // Continuous hold speeds
 const JOG_SPEED = { pan: 10.0, tilt: 8.0, slider: 40.0 };  // deg/s or mm/s
@@ -2740,6 +2745,13 @@ function stopUiNudge(axis, btn) {
     if (wasHolding) {
         // Held long enough — stop continuous movement
         sendCmd('ui_nudge_stop', { axis });
+    } else if (axis === 'slider') {
+        // Quick tap on the focus rail — move an exact number of motor steps.
+        // The timed-pulse path cannot go below about 0.6 mm, and a tap used to be
+        // 5 mm; focus stacking works in tens of microns.
+        const mm = parseFloat(document.getElementById('slider_tap_step_mm')?.value || 0.05);
+        const steps = Math.round(dir * mm * RAIL_STEPS_PER_MM);
+        if (steps) sendCmd('rail_step_nudge', { steps });
     } else {
         // Quick tap (released before hold threshold) — send a small fixed step
         const deg = dir * JOG_TAP[axis];

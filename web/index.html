@@ -2174,7 +2174,7 @@
 
                             <!-- Slider axis: ◄ [strip] ► nudge buttons at each end -->
                             <div class="slider-strip-wrap">
-                                <div class="slider-strip-label">SLIDER (hold ends to nudge)</div>
+                                <div class="slider-strip-label">SLIDER (tap ends = step, hold = run)</div>
                                 <div class="slider-nudge-row">
                                     <button class="jog-btn" id="jogSliderLeft"
                                             title="Hold: Slide Left (nudge)"
@@ -2189,6 +2189,20 @@
                                             onpointerdown="startUiNudge('slider', 1, this)"
                                             onpointerup="stopUiNudge('slider', this)"
                                             onpointercancel="stopUiNudge('slider', this)">►</button>
+                                </div>
+                                <div class="slider-strip-label" style="margin-top:4px;">
+                                    Tap step
+                                    <select id="slider_tap_step_mm"
+                                        title="How far one tap of the slider arrows moves the focus rail. The rail is 800 steps per mm, so one step is 1.25 µm; a focus stack moves about 33 µm between frames."
+                                        style="margin-left:6px; padding:2px 4px; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;">
+                                        <option value="5">5 mm</option>
+                                        <option value="1">1 mm</option>
+                                        <option value="0.25">250 µm</option>
+                                        <option value="0.05" selected>50 µm</option>
+                                        <option value="0.02">20 µm</option>
+                                        <option value="0.005">5 µm</option>
+                                        <option value="0.00125">1 step (1.25 µm)</option>
+                                    </select>
                                 </div>
                             </div>
                         </div>
