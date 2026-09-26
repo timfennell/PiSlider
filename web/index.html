@@ -1675,6 +1675,14 @@
                 <!-- Exposure Slots -->
                 <div class="sub-group-title">Exposure Slots</div>
 
+                <div class="row" style="gap:6px; align-items:center; margin-bottom:6px;">
+                    <button type="button" onclick="copyCameraToAllSlots()"
+                        style="padding:4px 10px; cursor:pointer;"
+                        title="Put the camera on auto, frame the specimen, then press: whatever the camera has chosen is copied into all three slots. The slots share one exposure unless the lighting differs — then use a slot's own Copy button.">
+                        &#10515; Copy camera settings to all slots</button>
+                    <span style="font-size:0.62rem; color:var(--text-dim);">reads the camera's current ISO, shutter and white balance</span>
+                </div>
+
                 <div class="group-box" style="margin-bottom:8px; padding:10px 8px 8px 8px;">
                     <h3 class="group-title" style="font-size:0.62rem; color:var(--accent-green);">Slot A</h3>
                     <div class="row" style="gap:6px; margin-bottom:4px; align-items:center;">
@@ -1714,6 +1722,9 @@
                         </div>
                         <div class="control-item" style="flex:0 0 36px; margin:0;"><label>AE</label>
                             <input type="checkbox" id="macro_slot_a_ae" style="width:auto; margin-top:6px;">
+                        </div>
+                        <div class="control-item" style="flex:0 0 84px; margin:0;"><label title="Read what the camera has chosen and copy it into this slot. Put the camera on auto, show this slot's background, then press.">From camera</label>
+                            <button type="button" onclick="copyCameraToSlot('a')" style="padding:3px 6px; width:100%; cursor:pointer;">⤓ Copy</button>
                         </div>
                     </div>
                     <div class="row" style="gap:6px; align-items:center;">
@@ -1772,6 +1783,9 @@
                         <div class="control-item" style="flex:0 0 36px; margin:0;"><label>AE</label>
                             <input type="checkbox" id="macro_slot_b_ae" style="width:auto; margin-top:6px;">
                         </div>
+                        <div class="control-item" style="flex:0 0 84px; margin:0;"><label title="Read what the camera has chosen and copy it into this slot. Put the camera on auto, show this slot's background, then press.">From camera</label>
+                            <button type="button" onclick="copyCameraToSlot('b')" style="padding:3px 6px; width:100%; cursor:pointer;">⤓ Copy</button>
+                        </div>
                     </div>
                     <div class="row" style="gap:6px; align-items:center;">
                         <div class="control-item" style="flex:1; margin:0;"><label>BG Color</label>
@@ -1828,6 +1842,9 @@
                         </div>
                         <div class="control-item" style="flex:0 0 36px; margin:0;"><label>AE</label>
                             <input type="checkbox" id="macro_slot_c_ae" style="width:auto; margin-top:6px;">
+                        </div>
+                        <div class="control-item" style="flex:0 0 84px; margin:0;"><label title="Read what the camera has chosen and copy it into this slot. Put the camera on auto, show this slot's background, then press.">From camera</label>
+                            <button type="button" onclick="copyCameraToSlot('c')" style="padding:3px 6px; width:100%; cursor:pointer;">⤓ Copy</button>
                         </div>
                     </div>
                     <div class="row" style="gap:6px; align-items:center;">

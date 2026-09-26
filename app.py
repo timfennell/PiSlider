@@ -7852,6 +7852,11 @@ async def websocket_endpoint(websocket: WebSocket):
                         if gain:
                             # Approximate sensor ISO from gain (base ISO 100)
                             reply["iso"] = round(gain * 100)
+                        # libcamera reports what auto white balance settled on,
+                        # so a slot can take the colour temperature as well.
+                        ct = meta.get("ColourTemperature")
+                        if ct:
+                            reply["kelvin"] = int(ct)
                         await websocket.send_json(reply)
                     else:
                         await websocket.send_json({"type": "camera_settings",

@@ -2059,7 +2059,14 @@ function handleIncomingData(data) {
     if (data.type === "sony_record_error") handleSonyRecordError(data);
     if (data.type === "sony_usb_status") handleSonyUsbStatus(data);
     if (data.type === "folder_created") handleFolderCreated(data);
-    if (data.type === "camera_settings") handleCameraSettingsReadout(data);
+    if (data.type === "camera_settings") {
+        handleCameraSettingsReadout(data);
+        if (_slotCopyPending) {
+            _slotCopyPending.forEach(slot => applyCameraSettingsToSlot(slot, data));
+            _slotCopyPending = null;
+            macroCalc();
+        }
+    }
     if (data.type === "preview_ready") showPreviewModal(data.url);
     if (data.type === "hg_frame_estimate") {
         const out = document.getElementById('seq_duration_calc');
@@ -2481,6 +2488,57 @@ const SONY_SHUTTERS = [
     [1/2500, '1/2500'],[1/3200, '1/3200'],[1/4000, '1/4000'],[1/5000, '1/5000'],
     [1/6400, '1/6400'],[1/8000, '1/8000'],
 ];
+
+// ─── Copy the camera's current settings into the exposure slots ──────────────
+// The slots normally share one exposure: changing the background colour does not
+// change it, only different lighting would. So the usual control fills all three
+// from one reading, and each slot keeps its own button for the lighting-differs
+// case.
+let _slotCopyPending = null;      // array of slot ids awaiting a camera reading
+
+function copyCameraToSlots(slots, label) {
+    _slotCopyPending = slots;
+    log(`Reading camera settings for ${label}…`);
+    if (!sendCmd('get_camera_settings')) {
+        _slotCopyPending = null;
+        log('⚠ Not connected — cannot read the camera.');
+    }
+}
+
+function copyCameraToAllSlots() { copyCameraToSlots(['a', 'b', 'c'], 'all slots'); }
+
+function copyCameraToSlot(slot) { copyCameraToSlots([slot], `slot ${slot.toUpperCase()}`); }
+
+function applyCameraSettingsToSlot(slot, data) {
+    if (data.error) { log(`⚠ Camera settings unavailable: ${data.error}`); return; }
+    const done = [];
+    if (data.iso != null) {
+        const iso = document.getElementById(`macro_slot_${slot}_iso`);
+        if (iso) { iso.value = Math.round(data.iso); done.push(`ISO ${Math.round(data.iso)}`); }
+    }
+    if (data.shutter != null) {
+        // The slot's shutter is a list of standard speeds, so snap to the nearest.
+        const sel = document.getElementById(`macro_slot_${slot}_shutter`);
+        if (sel && sel.options.length) {
+            let best = 0, bestDiff = Infinity;
+            [...sel.options].forEach((o, i) => {
+                const d = Math.abs(parseFloat(o.value) - data.shutter);
+                if (d < bestDiff) { bestDiff = d; best = i; }
+            });
+            sel.selectedIndex = best;
+            done.push(`shutter ${sel.options[best].textContent} (camera read ${prettyShutter(data.shutter)})`);
+        }
+    }
+    if (data.kelvin != null) {
+        const k = document.getElementById(`macro_slot_${slot}_kelvin`);
+        if (k) { k.value = Math.round(data.kelvin); done.push(`${Math.round(data.kelvin)}K`); }
+    }
+    // The slot now holds fixed values, so it must not auto-expose during the scan.
+    const ae = document.getElementById(`macro_slot_${slot}_ae`);
+    if (ae && ae.checked) { ae.checked = false; done.push('AE off'); }
+    log(done.length ? `Slot ${slot.toUpperCase()} ← ${done.join(', ')}`
+                    : `⚠ Camera returned no settings to copy into slot ${slot.toUpperCase()}.`);
+}
 
 function populateShutterSelect(id, defaultVal) {
     const sel = document.getElementById(id);
