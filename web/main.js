@@ -2059,6 +2059,10 @@ function handleIncomingData(data) {
     if (data.type === "sony_record_error") handleSonyRecordError(data);
     if (data.type === "sony_usb_status") handleSonyUsbStatus(data);
     if (data.type === "folder_created") handleFolderCreated(data);
+    if (data.type === "auto_bg_wb") handleAutoBgWb(data);
+    if (data.type === "auto_bg_wb_step") {
+        log(`  step ${data.step}: ${data.kelvin}K → R${data.r} G${data.g} B${data.b} (red/blue ${data.err_pct > 0 ? '+' : ''}${data.err_pct}%)`);
+    }
     if (data.type === "camera_settings") {
         handleCameraSettingsReadout(data);
         if (_slotCopyPending) {
@@ -2530,14 +2534,59 @@ function applyCameraSettingsToSlot(slot, data) {
         }
     }
     if (data.kelvin != null) {
-        const k = document.getElementById(`macro_slot_${slot}_kelvin`);
-        if (k) { k.value = Math.round(data.kelvin); done.push(`${Math.round(data.kelvin)}K`); }
+        const k   = document.getElementById(`macro_slot_${slot}_kelvin`);
+        const bgk = document.getElementById(`macro_slot_${slot}_bg_kelvin`);
+        // The background page's colour is tuned so the camera records it neutral,
+        // and must not follow the camera's own white balance. If this slot still
+        // follows it, pin the background at what it shows before the camera value
+        // lands — copying camera settings turned the background warm otherwise.
+        if (bgk && !parseInt(bgk.value || 0) && k) {
+            bgk.value = parseInt(k.value) || 5500;
+            done.push(`background pinned at ${bgk.value}K`);
+        }
+        if (k) { k.value = Math.round(data.kelvin); done.push(`camera WB ${Math.round(data.kelvin)}K`); }
     }
     // The slot now holds fixed values, so it must not auto-expose during the scan.
     const ae = document.getElementById(`macro_slot_${slot}_ae`);
     if (ae && ae.checked) { ae.checked = false; done.push('AE off'); }
     log(done.length ? `Slot ${slot.toUpperCase()} ← ${done.join(', ')}`
                     : `⚠ Camera returned no settings to copy into slot ${slot.toUpperCase()}.`);
+}
+
+// ─── Tune the background until the camera records it neutral ─────────────────
+// The answer depends on the panel and the camera, not on which slot is shooting,
+// so one measurement fills every slot — and with it the flats, which take their
+// background colour from the slots.
+function autoBgWhiteBalance(slot) {
+    const get = (f, d) => document.getElementById(`macro_slot_${slot}_${f}`)?.value || d;
+    const bgColor = get('bg', '');
+    if (bgColor !== 'white' && bgColor !== 'grey') {
+        log(`⚠ Slot ${slot.toUpperCase()} shows "${bgColor || 'no background'}" — auto BG white balance needs a white or grey background.`);
+        return;
+    }
+    log(`Slot ${slot.toUpperCase()}: measuring the ${bgColor} background through the camera…`);
+    sendCmd('auto_bg_wb', {
+        slot,
+        bg_color:      bgColor,
+        bg_kelvin:     parseInt(get('bg_kelvin', 0)) || parseInt(get('kelvin', 5500)),
+        camera_kelvin: parseInt(get('kelvin', 5500)),
+        iso:           parseInt(get('iso', 400)),
+        shutter_s:     parseFloat(get('shutter', 1 / 60)),
+        bg_settle_ms:  parseInt(get('bg_settle', 300)),
+    });
+}
+
+function handleAutoBgWb(data) {
+    if (data.error) { log(`⚠ Auto BG white balance: ${data.error}`); return; }
+    ['a', 'b', 'c'].forEach(s => {
+        const bgk = document.getElementById(`macro_slot_${s}_bg_kelvin`);
+        if (bgk) bgk.value = data.kelvin;
+    });
+    const green = Math.abs(data.green_pct) >= 2
+        ? `; green is ${data.green_pct > 0 ? '+' : ''}${data.green_pct}%, which colour temperature cannot correct — adjust the panel or the camera`
+        : '';
+    log(`BG Kelvin ← ${data.kelvin}K on all slots, from slot ${String(data.slot).toUpperCase()} after ${data.steps} step(s): `
+        + `red/blue within ${Math.abs(data.red_blue_pct)}%, levels R${data.levels[0]} G${data.levels[1]} B${data.levels[2]}${green}`);
 }
 
 function populateShutterSelect(id, defaultVal) {
@@ -4139,6 +4188,7 @@ function macroStart() {
                 awb: false,
                 bg_color:     document.getElementById('macro_slot_a_bg')?.value || '',
                 bg_settle_ms: parseInt(document.getElementById('macro_slot_a_bg_settle')?.value || 300),
+                bg_kelvin:    parseInt(document.getElementById('macro_slot_a_bg_kelvin')?.value || 0),
             },
             {
                 id: 'slot_B',
@@ -4155,6 +4205,7 @@ function macroStart() {
                 awb: false,
                 bg_color:     document.getElementById('macro_slot_b_bg')?.value || '',
                 bg_settle_ms: parseInt(document.getElementById('macro_slot_b_bg_settle')?.value || 300),
+                bg_kelvin:    parseInt(document.getElementById('macro_slot_b_bg_kelvin')?.value || 0),
             },
             {
                 id: 'slot_C',
@@ -4171,6 +4222,7 @@ function macroStart() {
                 awb: false,
                 bg_color:     document.getElementById('macro_slot_c_bg')?.value || 'grey',
                 bg_settle_ms: parseInt(document.getElementById('macro_slot_c_bg_settle')?.value || 300),
+                bg_kelvin:    parseInt(document.getElementById('macro_slot_c_bg_kelvin')?.value || 0),
             },
         ],
     };
@@ -4197,6 +4249,7 @@ function captureFlats() {
             ae:        document.getElementById('macro_slot_a_ae')?.checked ?? false,
             bg_color:  document.getElementById('macro_slot_a_bg')?.value || '',
             bg_settle_ms: parseInt(document.getElementById('macro_slot_a_bg_settle')?.value || 300),
+            bg_kelvin:    parseInt(document.getElementById('macro_slot_a_bg_kelvin')?.value || 0),
         },
         {
             id: 'slot_B',
@@ -4207,6 +4260,7 @@ function captureFlats() {
             ae:        document.getElementById('macro_slot_b_ae')?.checked ?? false,
             bg_color:  document.getElementById('macro_slot_b_bg')?.value || '',
             bg_settle_ms: parseInt(document.getElementById('macro_slot_b_bg_settle')?.value || 300),
+            bg_kelvin:    parseInt(document.getElementById('macro_slot_b_bg_kelvin')?.value || 0),
         },
         {
             id: 'slot_C',
@@ -4217,6 +4271,7 @@ function captureFlats() {
             ae:        document.getElementById('macro_slot_c_ae')?.checked ?? false,
             bg_color:  document.getElementById('macro_slot_c_bg')?.value || 'grey',
             bg_settle_ms: parseInt(document.getElementById('macro_slot_c_bg_settle')?.value || 300),
+            bg_kelvin:    parseInt(document.getElementById('macro_slot_c_bg_kelvin')?.value || 0),
         },
     ].filter(s => s.enabled && s.bg_color);
 

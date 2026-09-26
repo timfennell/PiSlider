@@ -637,6 +637,7 @@ def _build_macro_session(msg: dict) -> "MacroSession":
             awb              = bool(rs.get("awb", False)),
             bg_color         = rs.get("bg_color",    ""),      # "" | "black" | "white" | "grey"
             bg_settle_ms     = int(rs.get("bg_settle_ms", 300)),
+            bg_kelvin        = int(rs.get("bg_kelvin", 0) or 0),   # 0 = follow kelvin
         ))
 
     # Lens profile
@@ -7768,6 +7769,115 @@ async def websocket_endpoint(websocket: WebSocket):
                     logger.warning(f"estimate_hg_frames error: {_e}")
                     await websocket.send_json({"type": "hg_frame_estimate", "total": None, "error": str(_e)})
 
+            # ── TUNE THE BACKGROUND UNTIL THE CAMERA RECORDS IT NEUTRAL ──────
+            elif cmd == "auto_bg_wb":
+                # The background page's colour temperature is not the camera's
+                # white balance: it is whatever makes the panel RECORD neutral
+                # under the camera's settings. Finding it by eye is guesswork, so
+                # measure it: show the colour, photograph it, and move the
+                # display temperature until red and blue come out level.
+                slot_id  = str(msg.get("slot", "a"))
+                bg_color = str(msg.get("bg_color", "white"))
+                kelvin   = int(msg.get("bg_kelvin") or msg.get("kelvin") or 5500)
+                cam_k    = int(msg.get("camera_kelvin") or 5500)
+                iso      = int(msg.get("iso") or 400)
+                shutter  = float(msg.get("shutter_s") or 1 / 60)
+                settle   = int(msg.get("bg_settle_ms") or 300)
+
+                def _fail(m):
+                    return {"type": "auto_bg_wb", "slot": slot_id, "error": m}
+
+                try:
+                    if bg_color not in ("white", "grey"):
+                        await websocket.send_json(_fail(
+                            "This slot's background is not white or grey — there is no "
+                            "colour to neutralise."))
+                    elif state.get("active_camera", "picam") != "picam" or not (_HAS_PICAM and picam):
+                        await websocket.send_json(_fail(
+                            "Auto BG white balance needs the Pi camera: it reads a frame per "
+                            "step, which a Sony capture-and-download is too slow for. Set BG "
+                            "Kelvin by eye, or switch the active camera."))
+                    elif not _bg_clients:
+                        await websocket.send_json(_fail(
+                            "No background page connected — open /bg on the phone or tablet "
+                            "and check the dot is green."))
+                    else:
+                        # Fix the camera the way the slot will shoot: auto white
+                        # balance would cancel the very cast being measured.
+                        await asyncio.to_thread(picam.set_controls, {
+                            "AeEnable": False, "AwbEnable": False,
+                            "ExposureTime": int(shutter * 1_000_000),
+                            "AnalogueGain": max(1.0, iso / 100.0),
+                            "ColourTemperature": cam_k,
+                        })
+
+                        def _measure():
+                            """Mean R,G,B of the middle of the frame, 0-255."""
+                            frame = picam.capture_array()          # RGB888 preview stream
+                            h, w = frame.shape[:2]
+                            y0, y1 = int(h * 0.3), int(h * 0.7)
+                            x0, x1 = int(w * 0.3), int(w * 0.7)
+                            patch = frame[y0:y1, x0:x1, :3].astype("float32")
+                            return [float(patch[:, :, i].mean()) for i in range(3)]
+
+                        lo, hi = 2000.0, 12000.0
+                        k = float(min(max(kelvin, lo), hi))
+                        history, prev = [], None
+                        best = None
+                        for step in range(8):
+                            ok = await send_bg_command(bg_color, int(round(k)), settle)
+                            if not ok:
+                                await websocket.send_json(_fail(
+                                    "The background page did not confirm the colour."))
+                                break
+                            await asyncio.sleep(max(settle, 150) / 1000.0)
+                            await asyncio.to_thread(picam.capture_array)   # discard one, let AE/ISP settle
+                            r, g, b = await asyncio.to_thread(_measure)
+                            err = math.log(max(r, 1e-3) / max(b, 1e-3))    # >0 = recorded too warm
+                            history.append({"kelvin": int(round(k)), "r": round(r, 1),
+                                            "g": round(g, 1), "b": round(b, 1),
+                                            "err_pct": round((math.exp(err) - 1) * 100, 1)})
+                            await websocket.send_json({
+                                "type": "auto_bg_wb_step", "slot": slot_id, "step": step + 1,
+                                "kelvin": int(round(k)), "r": round(r), "g": round(g), "b": round(b),
+                                "err_pct": round((math.exp(err) - 1) * 100, 1)})
+                            if best is None or abs(err) < abs(best[1]):
+                                best = (k, err, [r, g, b])
+                            if max(r, g, b) > 250:
+                                await websocket.send_json(_fail(
+                                    "The background is clipping white — lower the panel "
+                                    "brightness or the exposure, then try again."))
+                                best = None
+                                break
+                            if abs(err) < 0.01:            # red and blue within 1%
+                                break
+                            if prev is None:
+                                # A warmer display raises recorded red, so step the
+                                # display the other way to start.
+                                k_next = k * (1.0 + 0.18 * (1 if err > 0 else -1))
+                            else:
+                                pk, pe = prev
+                                slope = (err - pe) / max(1e-6, math.log(k / pk)) if abs(k - pk) > 1 else -1.0
+                                if slope >= -1e-3:
+                                    slope = -1.0        # keep the step sane if the reading was noisy
+                                k_next = math.exp(math.log(k) - err / slope)
+                            prev = (k, err)
+                            k = float(min(max(k_next, lo), hi))
+                        if best is not None:
+                            k_final, err, rgb = best
+                            r, g, b = rgb
+                            green = (g / ((r + b) / 2.0) - 1.0) * 100.0 if (r + b) else 0.0
+                            await websocket.send_json({
+                                "type": "auto_bg_wb", "slot": slot_id,
+                                "kelvin": int(round(k_final)),
+                                "red_blue_pct": round((math.exp(err) - 1) * 100, 1),
+                                "green_pct": round(green, 1),
+                                "levels": [round(r), round(g), round(b)],
+                                "steps": len(history)})
+                except Exception as exc:
+                    logger.error(f"auto_bg_wb: {exc}", exc_info=True)
+                    await websocket.send_json(_fail(str(exc)))
+
             # ── READ CURRENT CAMERA SETTINGS ─────────────────────────────────
             elif cmd == "get_camera_settings":
                 cam = state.get("active_camera", "picam")
@@ -9368,6 +9478,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                         awb              = False,
                                         bg_color         = bg,
                                         bg_settle_ms     = int(s.get("bg_settle_ms", 300)),
+                                        bg_kelvin        = int(s.get("bg_kelvin", 0) or 0),
                                     )
                                     await broadcast({"type":"log",
                                         "msg": f"Flats: setting BG → {bg} …"})
@@ -9384,7 +9495,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                     # them, so the error propagates into the whole
                                     # scan instead of announcing itself.
                                     _bg_ok = await send_bg_command(
-                                        bg, slot.kelvin, slot.bg_settle_ms)
+                                        bg, slot.bg_kelvin or slot.kelvin, slot.bg_settle_ms)
                                     if not _bg_ok:
                                         await broadcast({"type":"log",
                                             "msg": f"✗ Flats aborted — the phone did not "

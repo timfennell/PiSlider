@@ -105,6 +105,12 @@ class ExposureSlot:
     # level for grey (50 = mid-tone grey card equivalent, ~18% reflectance).
     bg_color:         str   = ""
     bg_settle_ms:     int   = 200   # ms to wait after bg transition before shutter
+    # Colour temperature the BACKGROUND PAGE displays, which is not the camera's
+    # white balance. The background is tuned by eye so it records neutral under
+    # whatever white balance the camera is using; tying the two together made
+    # the background follow the camera and turned it warm. 0 = follow kelvin,
+    # which is what every project did before this existed.
+    bg_kelvin:        int   = 0
     # brightness is controlled manually on the phone — not commanded per-slot
 
 
@@ -3415,7 +3421,7 @@ class MacroEngine:
                         # is actually showing. That is the failure that turned a
                         # background orange mid-scan and was only caught by eye.
                         # Three in a row is not a blip; stop and say so.
-                        _bg_ok = await self._bg(slot.bg_color, slot.kelvin,
+                        _bg_ok = await self._bg(slot.bg_color, slot.bg_kelvin or slot.kelvin,
                                                 slot.bg_settle_ms)
                         if _bg_ok is False:
                             self._bg_fail = getattr(self, "_bg_fail", 0) + 1
@@ -3770,7 +3776,7 @@ class MacroEngine:
                     os.makedirs(slot_dir, exist_ok=True)
 
                     if slot.bg_color and self._bg is not None:
-                        await self._bg(slot.bg_color, slot.kelvin, slot.bg_settle_ms)
+                        await self._bg(slot.bg_color, slot.bg_kelvin or slot.kelvin, slot.bg_settle_ms)
 
                     # See the primary loop: the drain and settings calls above
                     # can block for the best part of a minute, so a stop has to
