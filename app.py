@@ -215,6 +215,12 @@ _sony_liveview_thread: Optional[object] = None   # threading.Thread
 _sony_usb_liveview_running: bool       = False
 _sony_usb_liveview_thread: Optional[object] = None
 _SONY_USB_PREVIEW_TMP = "/tmp/sony_usb_preview.jpg"
+# Set once live view has given up on this body. Automatic restarts (after a
+# sequence, after a cinematic move, on mode entry) honour it; only an explicit
+# press of the liveview button clears it. Without this the give-up guard lasted
+# about a minute: the next automatic start handed the camera back to a worker
+# that holds USB for 8s per doomed attempt, starving captures and flats.
+_sony_liveview_dead: bool = False
 
 # Sony USB macro pipeline — pipelined capture:
 #   macro_capture triggers the shutter, starts the download as a background
@@ -1761,11 +1767,18 @@ _LIVEVIEW_GIVE_UP = 10
 
 
 def _liveview_give_up(fails: int) -> None:
-    global _sony_liveview_running
+    global _sony_liveview_running, _sony_usb_liveview_running, _sony_liveview_dead
     _sony_liveview_running = False
+    # The USB worker calls this too, and its own flag has to be cleared here.
+    # Leaving it True made _start_sony_usb_liveview() return early as though a
+    # worker were alive, and left every "is preview running?" check lying.
+    _sony_usb_liveview_running = False
+    _sony_liveview_dead = True
     msg = (f"Live view stopped after {fails} consecutive failures — this camera is "
            f"not answering preview requests. It was holding the camera for 8s at a "
-           f"time, which blocks captures and flats. Use TAKE PREVIEW SHOT to frame.")
+           f"time, which blocks captures and flats. Use TAKE PREVIEW SHOT to frame. "
+           f"If captures are timing out too, power-cycle the camera body — that is "
+           f"the only thing that clears a wedged PTP stack.")
     logger.warning(msg)
     try:
         state["_pending_liveview_notice"] = msg
@@ -2352,11 +2365,22 @@ def _sony_usb_liveview_worker():
     logger.info("Sony USB liveview worker stopped")
 
 
-def _start_sony_usb_liveview():
-    """Start the USB preview worker thread if not already running."""
-    global _sony_usb_liveview_running, _sony_usb_liveview_thread
+def _start_sony_usb_liveview(force: bool = False):
+    """Start the USB preview worker thread if not already running.
+
+    force=True is for an explicit press of the liveview button, and is the only
+    thing that revives preview after it has given up on this body.
+    """
+    global _sony_usb_liveview_running, _sony_usb_liveview_thread, _sony_liveview_dead
     if _sony_usb_liveview_running:
         return
+    if _sony_liveview_dead:
+        if not force:
+            logger.info("Sony USB liveview: not restarting — it already gave up on "
+                        "this camera. Press the liveview button to try again.")
+            return
+        _sony_liveview_dead = False
+        logger.info("Sony USB liveview: retrying after an explicit request.")
 
     # The running flag is not enough on its own. _stop_sony_usb_liveview()
     # clears it and returns immediately, but the worker can still be parked
@@ -7583,7 +7607,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
             elif cmd == "sony_usb_liveview_start":
                 if state.get("active_camera") == "sony_usb":
-                    _start_sony_usb_liveview()
+                    _start_sony_usb_liveview(force=True)   # the operator asked
                     await broadcast({"type": "log",
                         "msg": "📹 Sony USB liveview started (~2-3fps via gphoto2 preview)."})
 
