@@ -579,18 +579,23 @@ def sync_all_keyframes():
         engine.add_keyframe(kf.slider_mm, kf.pan_deg, kf.tilt_deg)
 
     # 2. Sync Cinematic -> Macro endpoints (convert mm to steps)
-    # IMPORTANT: kf.slider_mm is in belt-drive mm (slider_axis.current_mm units, 50 steps/mm).
-    # Use slider_axis.steps_per_mm (50.0) NOT STEPS_PER_MM (800.0) for the conversion.
-    # belt_mm × 50 = actual motor steps = same unit as slider_axis.current_steps.
+    # kf.slider_mm carries whatever millimetres slider_axis.current_mm is being
+    # measured in: belt-drive mm (50 steps/mm) in timelapse and cinematic, focus
+    # rail mm (800 steps/mm) in macro. Converting with the belt figure in macro
+    # divided every marked endpoint by 16 — Set Start at 89 steps was stored as
+    # 5 — and this runs immediately after the mark handler stores the right
+    # number, so it silently replaced it. Use the scale the axis is in.
+    _rail_scale = (STEPS_PER_MM if state.get("active_mode") == "macro"
+                   else slider_axis.steps_per_mm)
     if len(_prog_move.keyframes) >= 1:
         kf0 = _prog_move.keyframes[0]
-        state["macro_rail_start_steps"] = int(kf0.slider_mm * slider_axis.steps_per_mm)
+        state["macro_rail_start_steps"] = int(round(kf0.slider_mm * _rail_scale))
         state["macro_rotation_start_deg"] = kf0.pan_deg
         state["macro_aux_start_deg"] = kf0.tilt_deg
 
     if len(_prog_move.keyframes) >= 2:
         kfn = _prog_move.keyframes[-1]
-        state["macro_rail_end_steps"] = int(kfn.slider_mm * slider_axis.steps_per_mm)
+        state["macro_rail_end_steps"] = int(round(kfn.slider_mm * _rail_scale))
         state["macro_rotation_end_deg"] = kfn.pan_deg
         state["macro_aux_end_deg"] = kfn.tilt_deg
 
