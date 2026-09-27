@@ -782,6 +782,23 @@ if _restored_rail_steps != 0:
                 f"(≈{_restored_rail_steps/800.0:.2f}mm)")
 
 
+def _sync_inertia_rail_scale() -> None:
+    """Tell the jog engine which mm the slider axis is measured in.
+
+    The same motor is the belt slider (50 steps/mm) in timelapse and cinematic,
+    and the focus rail (800 steps/mm) in macro. The jog integrator used to add
+    belt millimetres to current_mm whichever mode was live, so in macro the
+    readout — and every start/end point marked from it — ran 16× the distance
+    the rail had actually travelled.
+    """
+    if not _inertia:
+        return
+    if state.get("active_mode") == "macro":
+        _inertia.slider_mm_per_step = 1.0 / STEPS_PER_MM
+    else:
+        _inertia.slider_mm_per_step = None
+
+
 # ─── AUX GPIO INTERRUPT ───────────────────────────────────────────────────────
 def _setup_aux_trigger():
     try:
@@ -7639,6 +7656,7 @@ async def websocket_endpoint(websocket: WebSocket):
             elif cmd == "set_mode":
                 mode = msg.get("value", "timelapse")
                 state["active_mode"] = mode
+                _sync_inertia_rail_scale()
                 # Switch picam preview aspect ratio
                 if _HAS_PICAM and picam and not state["is_running"]:
                     try:
@@ -12390,6 +12408,7 @@ async def _startup():
         pan_axis    = pan_axis,
         tilt_axis   = tilt_axis,
     )
+    _sync_inertia_rail_scale()   # the restored mode decides the rail's mm scale
     _prog_move = ProgrammedMove(
         hardware    = hw,
         guard       = _soft_guard,

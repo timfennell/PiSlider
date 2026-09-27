@@ -356,6 +356,13 @@ class InertiaEngine:
         self._pan       = pan_axis
         self._tilt      = tilt_axis
 
+        # Fractional step carried between ticks (see _tick) and, in macro mode,
+        # the mm-per-step of the focus rail. None means "this axis is the belt
+        # slider", where mm is integrated directly as before.
+        self._slider_step_rem: float = 0.0
+        self._last_vact_slider: int  = 0
+        self.slider_mm_per_step: Optional[float] = None
+
         # Physics state (steps/s)
         self._v_slider: float = 0.0
         self._v_pan:    float = 0.0
@@ -614,6 +621,10 @@ class InertiaEngine:
                 if sleep_time > 0.0005:   # don't bother sleeping for <0.5 ms
                     time.sleep(sleep_time)
         finally:
+            # Nothing is turning any more, so don't let the next tick count
+            # steps for a VACTUAL that is no longer running.
+            self._last_vact_slider = 0
+            self._slider_step_rem  = 0.0
             try:
                 self.hw.stop_all_axes()
             except Exception as _stop_err:
@@ -742,8 +753,27 @@ class InertiaEngine:
         # Integrate position with CLAMPED velocities so tracker stays within limits.
         # Also track steps for focus rail macro mode (convert mm delta to steps)
         delta_mm = vs * dt
-        self._slider.current_mm += delta_mm
-        self._slider.current_steps += int(delta_mm * self._slider.steps_per_mm)
+        # Steps delivered since the last tick come from the VACTUAL commanded
+        # then, not from the velocity about to be asked for: VACTUAL is an
+        # integer, so what the driver actually ran is quantised (15 mm/s asks
+        # for 187.5 and gets 187).
+        #
+        # Carry the fractional step between ticks too. int() on every 20 ms tick
+        # threw away up to a step each time — 50 steps a second, 62 µm of focus
+        # rail — so the step count drifted behind the motor while jogging, and a
+        # marked start/end pointed somewhere the rail had never been.
+        _sps = self._last_vact_slider * (SLIDER_STEPS_PER_MM / VACTUAL_PER_MM_S)
+        self._slider_step_rem += _sps * dt
+        _whole_steps = int(self._slider_step_rem)
+        self._slider_step_rem -= _whole_steps
+        self._slider.current_steps += _whole_steps
+        if self.slider_mm_per_step:
+            # Macro mode: the focus rail is 800 steps/mm, not the belt slider's
+            # 50, so mm has to come from the steps actually commanded. Adding
+            # delta_mm straight in made the readout 16× the real travel.
+            self._slider.current_mm = self._slider.current_steps * self.slider_mm_per_step
+        else:
+            self._slider.current_mm += delta_mm
         self._pan.current_deg   += vp * dt
         self._tilt.current_deg  += vt * dt
 
@@ -759,7 +789,9 @@ class InertiaEngine:
 
         # Send to TMC2209 VACTUAL (hardware-timed, jitter-free)
         # Negative values spin in reverse; VACTUAL=0 returns to STEP/DIR idle.
-        self.hw.set_tmc_velocity(ADDR_SLIDER, int(vs * VACTUAL_PER_MM_S))
+        _vact_slider = int(vs * VACTUAL_PER_MM_S)
+        self._last_vact_slider = _vact_slider   # next tick counts the steps this runs
+        self.hw.set_tmc_velocity(ADDR_SLIDER, _vact_slider)
         self.hw.set_tmc_velocity(ADDR_PAN,    int(vp * VACTUAL_PER_DEG_S_PAN))
         self.hw.set_tmc_velocity(ADDR_TILT,   int(vt * VACTUAL_PER_DEG_S_TILT))
 
