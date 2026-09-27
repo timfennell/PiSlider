@@ -7198,7 +7198,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             await asyncio.sleep(0.1)
                             try:
                                 await websocket.send_json({"type": "status",
-                                    "pos_s": round(slider_axis.current_mm, 2),
+                                    "pos_s": round(slider_axis.current_mm, 4),
                                     "pos_p": round(pan_axis.current_deg, 2),
                                     "pos_t": round(tilt_axis.current_deg, 2)})
                             except Exception:
@@ -12193,7 +12193,7 @@ async def _joystick_target_sync():
             _pos_tick = 0
             asyncio.create_task(broadcast({
                 "type":  "status",
-                "pos_s": round(slider_axis.current_mm,  2),
+                "pos_s": round(slider_axis.current_mm,  4),
                 "pos_p": round(pan_axis.current_deg,    2),
                 "pos_t": round(tilt_axis.current_deg,   2),
             }))
