@@ -7091,15 +7091,29 @@ async def websocket_endpoint(websocket: WebSocket):
                     continue
                 _steps = max(-4000, min(4000, _steps))       # never more than 5 mm a tap
                 _target = slider_axis.current_steps + _steps
-                if slider_axis.soft_min_steps != slider_axis.soft_max_steps:
-                    _lo = min(slider_axis.soft_min_steps, slider_axis.soft_max_steps)
-                    _hi = max(slider_axis.soft_min_steps, slider_axis.soft_max_steps)
-                    if not (_lo <= _target <= _hi):
+                # The rail has no home switch, so zero is simply wherever the axis
+                # was last zeroed — usually mid-rail. A 0…max window anchored to
+                # that zero is a fiction: it blocks jogging backwards while there
+                # is still rail left. Only a window the operator set themselves
+                # limits a manual nudge, and even then it clamps to the edge
+                # instead of refusing the whole move.
+                _lo = min(slider_axis.soft_min_steps, slider_axis.soft_max_steps)
+                _hi = max(slider_axis.soft_min_steps, slider_axis.soft_max_steps)
+                _default_window = (_lo == 0 and _hi == int(slider_axis.max_mm * STEPS_PER_MM))
+                if _hi > _lo and not _default_window:
+                    _clamped = max(_lo, min(_hi, _target))
+                    if _clamped != _target:
+                        _steps  = _clamped - slider_axis.current_steps
+                        _target = _clamped
+                        if _steps == 0:
+                            await websocket.send_json({"type": "log",
+                                "msg": f"⛔ Rail is at its set limit "
+                                       f"[{_lo / STEPS_PER_MM:.2f}…{_hi / STEPS_PER_MM:.2f}] mm — "
+                                       f"widen the rail limits to go further."})
+                            continue
                         await websocket.send_json({"type": "log",
-                            "msg": f"⛔ Rail nudge refused — {_target} steps "
-                                   f"(≈{_target / STEPS_PER_MM:.3f}mm) is outside the rail "
-                                   f"limits [{_lo}…{_hi}] steps."})
-                        continue
+                            "msg": f"Rail nudge clipped to the set limit at "
+                                   f"{_target / STEPS_PER_MM:.3f} mm."})
                 try:
                     hw.enable_motors(True)
                     # Same timing the scan's precision move uses: 0.25 s per mm,
@@ -7351,10 +7365,13 @@ async def websocket_endpoint(websocket: WebSocket):
                 state["tilt_min"]   = -30.0
                 state["tilt_max"]   =  30.0
 
-                # Also reset slider soft limit steps (will be recalculated when limits are set)
-                # Use STEPS_PER_MM = 800.0 (macro mode) not slider_axis.steps_per_mm (timelapse mode)
+                # Clear the slider's step window too. Equal min and max means
+                # "unset" everywhere it is read, which is what this block is for.
+                # Installing 0…max_mm instead used to pin the new zero to the end
+                # of the travel, so the rail could not be jogged backwards at all
+                # even with most of the rail still behind the carriage.
                 slider_axis.soft_min_steps = 0
-                slider_axis.soft_max_steps = int(slider_axis.max_mm * STEPS_PER_MM)
+                slider_axis.soft_max_steps = 0
 
                 # Clear keyframes — they referenced old coordinate frame
                 if _prog_move:
